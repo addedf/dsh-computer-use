@@ -37,7 +37,9 @@ import { guard } from './lib/guard.js'
 import { cuaCall, withSession } from './lib/cua.js'
 import { createToolScope, getSessionState } from './lib/session.js'
 import { getSnapshot, resolveWindow } from './lib/snapshot.js'
+import { runSteps } from './lib/batch.js'
 import { browserTools } from './lib/browser.js'
+import { conditionTools } from './lib/conditions.js'
 import { registerSkills } from './lib/skills.js'
 import { registerCleanup } from './lib/lifecycle.js'
 
@@ -161,7 +163,10 @@ export function apply(ctx, config) {
     registered.set(definition.name, definition)
     return ctx.tools.register(definition)
   }
-  const failed = (_toolName, err) => ({ ok: false, result: `✗ ${err.message}`, ...(err.code ? { errorCode: String(err.code) } : {}) })
+  const conditions = new Set(['computer_verify', 'computer_wait_for', 'browser_verify', 'browser_wait_for'])
+  const failed = (toolName, err) => conditions.has(toolName)
+    ? { ok: false, result: err.message, status: err.code === 'CANCELLED' ? 'cancelled' : 'error', matched: false, data: { status: err.code === 'CANCELLED' ? 'cancelled' : 'error', matched: false, ...(err.code ? { code: String(err.code) } : {}) } }
+    : { ok: false, result: `✗ ${err.message}`, ...(err.code ? { errorCode: String(err.code) } : {}) }
 
   /** 统一包装：先过安全护栏，再执行实现（exec 透传给需要 route 的实现）。 */
   const wrap = (toolName, impl) => (args, exec) => runScoped(exec, async () => {
@@ -171,14 +176,14 @@ export function apply(ctx, config) {
       const g = await guard(ctx, cfg, toolName, args, exec)
       if (!g.ok) return failed(toolName, new Error(g.reason))
       if (exec?.signal?.aborted) throw Object.assign(new Error('操作已取消。'), { code: 'CANCELLED' })
-      if (toolName.startsWith('computer_') && !['computer_wait', 'computer_status', 'computer_skill'].includes(toolName)) {
+      if (toolName.startsWith('computer_') && !['computer_wait', 'computer_status', 'computer_verify', 'computer_wait_for', 'computer_skill'].includes(toolName)) {
         if (getSnapshot() !== before) throw new Error('审批期间观察快照已变化：请重新观察。')
         resolveWindow(cfg.ttlMs)
       }
       const state = getSessionState()
-      if (!state.initialized
+      if (!state.initialized && !conditions.has(toolName)
         && !(cfg.browserBackend === 'playwright' && toolName.startsWith('browser_'))
-        && !['app_list', 'computer_status', 'computer_wait'].includes(toolName)) {
+        && !['app_list', 'computer_status', 'computer_wait', 'run_steps'].includes(toolName)) {
         await cuaCall('start_session', withSession())
         ownedSessions.add(withSession().session)
         state.initialized = true
@@ -197,7 +202,7 @@ export function apply(ctx, config) {
       '操作电脑前必须先调用本工具取得快照；之后用 computer_click(element=[编号]) 或 computer_click(x=,y=) 操作（坐标为窗口本地截图像素）。' +
       'mode 选择：ax（默认，零成本树）/ vision（DeepSeek 视觉观察者结构化描述，免 ZHIPU key）/ native（截图直读，当前对话模型直接看图，需模型支持图片输入）。' +
       'AX 树无法解析（游戏/Canvas/Electron）时自动降级：native（若当前模型支持图片）→ vision → ax。' +
-      '快照默认 120 秒过期（以 ttlMs 配置为准），过期后需重新观察。',
+      '快照默认 120 秒过期（以 ttlMs 配置为准），过期后需重新观察；可用 run_steps 减少往返。',
     parameters: {
       window: {
         type: 'string',
@@ -410,8 +415,59 @@ export function apply(ctx, config) {
   for (const tool of browserTools(ctx, cfg)) {
     register(defineTool({ ...tool, output: { ...OUT(IMAGE_FIELD), render: renderWithImage }, execute: wrap(tool.name, (args, _cfg, exec) => tool.execute(args, exec)) }))
   }
+  for (const tool of conditionTools(ctx, cfg)) {
+    register(defineTool({ ...tool, execute: wrap(tool.name, (args, _cfg, exec) => tool.execute(args, exec)) }))
+  }
   const disposeSkills = registerSkills(ctx, { ...cfg, registerTool: register })
   registerCleanup(ctx, disposeSkills)
+
+  register(defineTool({
+    name: 'run_steps',
+    description: '声明式动态编排：每组1–20步，save_as保存结果，args用{$ref:"page.data.refs",where:{name:"姓名"},pick:"ref"}唯一选择新目标。when:{ref:"check.data.matched",equals:true}分支；repeat/steps/until有界循环或for_each/as/steps遍历。每个工具都过宿主权限和护栏；任一步失败立即停、不重放。最多60次工具、120秒、3层；优先用条件等待验证结果。',
+    parameters: {
+      variables: { type: 'object', additionalProperties: true, description: '可选：流程初始变量。' },
+      return_vars: { type: 'array', items: { type: 'string' }, description: '可选：仅回显指定变量，避免重复整页内容。' },
+      steps: {
+        type: 'array', required: true,
+        items: { type: 'object', additionalProperties: false, properties: {
+          tool: { type: 'string', description: '工具步骤的本插件工具名；不允许嵌套 run_steps。' },
+          args: { type: 'object', additionalProperties: true, description: '该工具的参数对象。' },
+          save_as: { type: 'string', description: '将完整工具结果存为变量，如 page；后续可引用 page.data.refs。' },
+          when: { type: 'object', additionalProperties: false, properties: { ref: { type: 'string', required: true }, equals: { oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }, { type: 'null' }] }, not: { type: 'boolean' } } },
+          repeat: { type: 'integer', description: '控制组重复上限1–10，不是失败重试。' },
+          until: { type: 'object', additionalProperties: false, properties: { ref: { type: 'string', required: true }, equals: { oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }, { type: 'null' }] }, not: { type: 'boolean' } } },
+          for_each: { oneOf: [{ type: 'array', items: { type: 'json' } }, { type: 'object', additionalProperties: true }], description: '控制组遍历最多20项数组或变量引用。' },
+          as: { type: 'string', description: 'for_each 当前项的变量名。' },
+          steps: { type: 'array', items: { type: 'object', additionalProperties: true }, description: '控制组中的子步骤，结构与外层相同。' },
+          otherwise: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'when为false时的子步骤。' },
+        } },
+      },
+    },
+    output: { ...OUT({
+      completed: { type: 'integer' },
+      failedStep: { oneOf: [{ type: 'integer' }, { type: 'null' }] },
+      steps: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+        tool: { type: 'string' }, ok: { type: 'boolean' }, result: { type: 'string' },
+      } } },
+      ...IMAGE_FIELD,
+    }), render: renderWithImage },
+    execute: wrap('run_steps', (args, _cfg, exec) => runSteps(args, exec, registered, async (step, index, childExec = exec) => {
+      // Nested calls must traverse the host policy pipeline, not only our own
+      // guard. A denied leaf tool remains denied when requested through a batch.
+      if (typeof ctx.tools.execute !== 'function') throw new Error('run_steps 需要宿主 tools.execute 执行逐步权限检查。')
+      const result = await ctx.tools.execute({
+        name: step.tool, arguments: step.args || {}, agent: exec?.agent,
+        signal: childExec?.signal || new AbortController().signal,
+        callId: `${exec?.callId || 'run_steps'}:step:${index + 1}`,
+        ...(exec?.rootCallId ? { rootCallId: exec.rootCallId } : {}),
+        ...(exec?.token ? { parent: exec.token } : {}),
+      })
+      for (const context of result.additionalContexts || []) exec?.deferContext?.(context)
+      if (result.concludesTurn) exec?.concludeTurn?.()
+      if (result.isError) return { ok: false, result: result.error?.message || '宿主拒绝执行此步骤。' }
+      return result.value
+    })),
+  }))
 
   ctx.logger?.info(`dsh-computer-use: ${registered.size} 个工具已注册`)
 }
