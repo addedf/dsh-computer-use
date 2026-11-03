@@ -90,7 +90,9 @@ flowchart LR
 | 安全护栏 | 快照 TTL、应用白名单、危险操作审批、密码框保护 |
 | 跨平台 | macOS 已验证；Windows/Linux 需按真实环境完成平台验收 |
 
-## 12 个模型工具
+## 36 个模型工具
+
+完整用法见 [技能、条件与浏览器指南](docs/usage.md)。包内两份 skill 会注册到 DSH；默认浏览器使用独立 headless Playwright Chrome，原生桌面仍用 cua-driver。现有 CUA 浏览器模式可显式配置保留。
 
 | 工具 | 作用 | 主要参数 |
 |---|---|---|
@@ -106,6 +108,36 @@ flowchart LR
 | `computer_wait` | 等待界面加载或动画完成 | `ms`，最大 60000 |
 | `app_list` | 列出正在运行的应用 | 无 |
 | `app_launch` | 启动应用 | `name` 或 `bundle_id`，可选 `bring_to_front` |
+
+## 桌面与浏览器闭环改进
+
+- 驱动每次调用重新发现，支持官方 installer / macOS App 路径，安装后再次调用即可。`computer_status` 或 `npm run doctor` 可只读检查服务与权限。
+- AX 强制读取结构化 `elements`，优先使用 `screenshot_frame` 给出正确截图坐标。截图留在本地驱动上下文；正常 AX 不返回图片附件，仍消耗文字 Token。
+- 桌面和网页快照按 Agent 会话隔离；同一插件串行执行。不同会话同时观察同一个窗口仍会使驱动旧 token 失效，需要重新观察。
+- 新安装统一默认 `ttlMs: 120000`。旧 patch 的显式 15000/30000 不会自动覆盖。编号和坐标都检查 TTL，观察失败清除旧快照。
+- `run_steps` 支持保存结果、唯一匹配、条件分支与有界循环；每组 1–20 步，最多 60 次工具调用。每步通过宿主权限流程和插件护栏，失败即停，不重放。
+- 点击使用驱动自带虚拟光标动画，省去旧实现多次子进程滑行。已投递后仍需观察界面确认结果。
+
+| 新工具 | 用法 |
+|---|---|
+| `computer_status` | 只读驱动、服务及权限诊断 |
+| `run_steps` | `{steps:[{tool:"screen_observe",args:{window_id:123}},{tool:"computer_click",args:{element:5}},{tool:"screen_observe",args:{window_id:123}}]}` |
+| `browser_open` | `{url:"https://example.com"}`，本会话独立临时 Chromium |
+| `browser_observe` | 网页文字、语义 outline、当前 refs |
+| `browser_navigate` | `{url:"https://example.com"}`，导航后自动观察 |
+| `browser_click` | `{ref:"p2:1"}`，使用最新观察中的真实 ref |
+| `browser_type` | `{ref:"p2:0",text:"示例",replace:true}`；空串可清空 |
+| `browser_scroll` | `{ref:"p2:1",direction:"down",amount:500}`，CSS 像素 |
+
+默认浏览器通过 playwright-core 启动本机 Chrome 的独立临时 profile，不依赖 cua-driver 的网页接口，不下载浏览器、不继承用户 Chrome 登录态。`browserBackend: cua` 保留驱动模式；先用 `browser_capabilities` 识别实际支持的功能。每次网页动作后 refs 失效，重新观察或使用条件工具返回的新 observation。敏感/不完整页面暂停自动输入，危险目标按本次审批处理。上传、下载需要宿主文件服务和策略，详见使用指南。
+
+根据 `screen_zoom` 或 compact 图片内坐标点击时，使用 `computer_click(x=...,y=...,from_zoom=true)`，由驱动处理留白与缩放；整窗截图坐标不传此参数。元素编号始终直接用于 `element`。
+
+源码更新需要宿主重新加载插件。是否已加载，以实际工具列表为准；验证源码通过不代表正在运行的 DSH 已更新。
+
+`npm run verify:host` 可在独立 DSH_HOME 中通过常规插件入口进行真实模型、标准 skill、文件审批与上传下载的端到端验收，不影响既有会话。路由和只读凭据引用配置见 [使用指南](docs/usage.md)，本机实测及清理证据见 [验证报告](VERIFICATION.md)。
+
+`npm run verify:web` 验收 UCI 公开真实网站的查找、跨页取数和下载；`npm run verify:approval-ui` 使用正式 DSH 审批页面，分别记录自动点击与真人确认。上传等待批准超过 TTL 时会只读复核原目标后继续，其他旧 ref 的过期规则保持不变。
 
 ## 快速开始
 
@@ -170,7 +202,9 @@ export CUA_DRIVER_BIN=/path/to/cua-driver
 在 Windows 官方安装器布局中，插件还会自动探测
 `%USERPROFILE%\\.cua-driver\\packages\\current\\cua-driver.exe`；GUI 宿主的 PATH 不完整时无需手工把目录加入 PATH。
 
-安装完成后重启宿主，再通过 `app_list` 或 `screen_observe` 验证工具是否出现。
+驱动安装请按 [cua-driver 官方说明](https://cua.ai/docs/cua-driver/quickstart) 操作，macOS 运行 `cua-driver permissions grant` 后本人完成系统授权。插件不静默下载安装驱动，也不更改驱动遥测配置。
+
+安装完成后重载宿主，再通过 `computer_status`、`app_list` 或 `screen_observe` 验证工具是否出现。
 
 ## 第一个完整任务
 
@@ -264,7 +298,7 @@ native（当前路由支持图片时）
 - `screen_observe` 输出的 `@(x,y)` 与 `computer_click(x=,y=)` 使用同一坐标系；
 - 不需要乘以 2；
 - 不需要加屏幕坐标或窗口偏移；
-- 使用 `screen_zoom` 时，返回图片是局部区域，但点击仍应使用整窗截图坐标。
+- 使用 zoom / compact 图片内坐标时传 `from_zoom=true`，由驱动换算为整窗坐标。
 
 优先使用：
 
@@ -309,18 +343,20 @@ computer_click(x=640, y=420)
 ```yaml
 - id: dsh-computer-use
   config:
-    ttlMs: 30000
+    ttlMs: 120000
     maxElements: 500
     allowedApps: []
     cursorTheme: com.dsh.computeruse.rainbow
     nativeImage: auto
+    browserBackend: playwright
+    browserHeadless: true
     visionProvider: deepseek-official
     visionModel: deepseek-v4-flash-vision-exp
 ```
 
 | 配置项 | 默认值 | 说明 |
 |---|---:|---|
-| `ttlMs` | `30000` | 观察快照有效期，单位毫秒；多步任务建议显式设置 30000-60000 |
+| `ttlMs` | `120000` | 快照有效期，单位毫秒；允许 1000–600000，旧配置保留原值 |
 | `maxElements` | `500` | 单次观察最多返回的编号元素数量 |
 | `allowedApps` | `[]` | 空数组表示不限制；非空时只允许列表中的应用 |
 | `cursorTheme` | `com.dsh.computeruse.rainbow` | 虚拟光标主题；空字符串使用引擎默认主题 |
@@ -414,6 +450,10 @@ Observe → Decide → Execute with Guardrails → Observe and Verify
 It can inspect desktop windows, expose actionable AX/UIA elements, use a screenshot-based visual fallback, and operate through an isolated virtual cursor. It is useful for desktop automation, Computer Use research, internal workflows, and agentic applications that need bounded desktop actions.
 
 > This is a community plugin, not an official DeepSeek product and not affiliated with DeepSeek.
+
+## Current improvements
+
+Thirty-six tools include bundled desktop/browser skills, declarative waits and assertions, and dynamic batches with references, branches and bounded loops. The default browser backend launches an isolated headless Chrome through playwright-core; CUA remains an explicit compatibility backend. Tabs, history, forms, dialogs, screenshots and host-authorized file transfers are available according to browser_capabilities. See the [usage guide](docs/usage.md) for contracts and boundaries. New installs default to a 120-second snapshot TTL; existing explicit settings remain. Reload the host to load updated source.
 
 ## Highlights
 
@@ -523,7 +563,7 @@ Since v0.2.0, all coordinates are **window-local screenshot pixels**:
 - coordinates returned by `screen_observe` and coordinates accepted by `computer_click` share the same space;
 - do not multiply by two;
 - do not add a screen or window offset;
-- `screen_zoom` returns a cropped image, but click coordinates remain coordinates in the full-window screenshot space.
+- use `from_zoom=true` for coordinates read from a zoom or compact image; the driver maps them back to the full window.
 
 Prefer semantic element actions:
 
@@ -555,18 +595,20 @@ If the driver reports `background_unavailable`, the plugin asks for one-time app
 ```yaml
 - id: dsh-computer-use
   config:
-    ttlMs: 30000
+    ttlMs: 120000
     maxElements: 500
     allowedApps: []
     cursorTheme: com.dsh.computeruse.rainbow
     nativeImage: auto
+    browserBackend: playwright
+    browserHeadless: true
     visionProvider: deepseek-official
     visionModel: deepseek-v4-flash-vision-exp
 ```
 
 | Option | Default | Description |
 |---|---:|---|
-| `ttlMs` | `30000` | Observation lifetime in milliseconds |
+| `ttlMs` | `120000` | Observation lifetime in milliseconds |
 | `maxElements` | `500` | Maximum indexed elements returned by observation |
 | `allowedApps` | `[]` | Empty means unrestricted; otherwise only listed apps are allowed |
 | `cursorTheme` | `com.dsh.computeruse.rainbow` | Virtual cursor theme; empty uses the engine default |
@@ -607,6 +649,7 @@ The macOS path has been verified in the project evidence. Windows and Linux stil
 ```bash
 npm install
 npm run check
+npm test
 node verify-runtime.mjs
 ```
 
