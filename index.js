@@ -38,6 +38,7 @@ import { cuaCall, withSession } from './lib/cua.js'
 import { createToolScope, getSessionState } from './lib/session.js'
 import { getSnapshot, resolveWindow } from './lib/snapshot.js'
 import { browserTools } from './lib/browser.js'
+import { registerSkills } from './lib/skills.js'
 import { registerCleanup } from './lib/lifecycle.js'
 
 export const name = 'dsh-computer-use'
@@ -170,7 +171,7 @@ export function apply(ctx, config) {
       const g = await guard(ctx, cfg, toolName, args, exec)
       if (!g.ok) return failed(toolName, new Error(g.reason))
       if (exec?.signal?.aborted) throw Object.assign(new Error('操作已取消。'), { code: 'CANCELLED' })
-      if (toolName.startsWith('computer_') && !['computer_wait', 'computer_status'].includes(toolName)) {
+      if (toolName.startsWith('computer_') && !['computer_wait', 'computer_status', 'computer_skill'].includes(toolName)) {
         if (getSnapshot() !== before) throw new Error('审批期间观察快照已变化：请重新观察。')
         resolveWindow(cfg.ttlMs)
       }
@@ -409,6 +410,8 @@ export function apply(ctx, config) {
   for (const tool of browserTools(ctx, cfg)) {
     register(defineTool({ ...tool, output: { ...OUT(IMAGE_FIELD), render: renderWithImage }, execute: wrap(tool.name, (args, _cfg, exec) => tool.execute(args, exec)) }))
   }
+  const disposeSkills = registerSkills(ctx, { ...cfg, registerTool: register })
+  registerCleanup(ctx, disposeSkills)
 
   ctx.logger?.info(`dsh-computer-use: ${registered.size} 个工具已注册`)
 }

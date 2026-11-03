@@ -42,7 +42,8 @@
     "PERMISSIONS.md",
     "docs/",
     "assets/",
-    "verify-runtime.mjs"
+    "verify-runtime.mjs",
+    "skills/"
   ],
   "scripts": {
     "test": "node --test tests/*.test.mjs",
@@ -53,6 +54,7 @@
     "@deepseek-ai/schemastery": ">=3.18.2 <4"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-skill": "0.1.2-rc.1",
     "@deepseek-ai/dsh-tools": "0.1.2-rc.1",
     "@deepseek-ai/schemastery": "3.18.2"
   },
