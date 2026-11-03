@@ -1,6 +1,6 @@
 {
   "name": "dsh-computer-use",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Computer Use 插件：虚拟鼠标真人操作 + 原生视觉模型接入（deepseek-v4-flash-vision-exp 直读截图），screen_observe 等 12 个模型友好工具",
   "type": "module",
   "main": "index.js",
@@ -49,7 +49,7 @@
     "check": "node --check index.js && node --check lib/*.js && bash -n install.sh && bash -n uninstall.sh"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": ">=0.1.2-rc.1 <0.2.0",
+    "@deepseek-ai/dsh-tools": ">=0.1.2-rc.1 <0.3",
     "@deepseek-ai/schemastery": ">=3.18.2 <4"
   },
   "devDependencies": {
