@@ -37,6 +37,7 @@ import { guard } from './lib/guard.js'
 import { cuaCall, withSession } from './lib/cua.js'
 import { createToolScope, getSessionState } from './lib/session.js'
 import { getSnapshot, resolveWindow } from './lib/snapshot.js'
+import { browserTools } from './lib/browser.js'
 import { registerCleanup } from './lib/lifecycle.js'
 
 export const name = 'dsh-computer-use'
@@ -59,6 +60,8 @@ export const Config = z.object({
   visionProvider: z.string().default('deepseek-official'),
   /** Mode D 观察者模型（需声明 image 输入）。 */
   visionModel: z.string().default('deepseek-v4-flash-vision-exp'),
+  browserBackend: z.union(['cua', 'playwright']).default('playwright'),
+  browserHeadless: z.boolean().default(true),
 })
 
 /** 统一输出 schema：ok + result 文本。 */
@@ -139,6 +142,8 @@ export function apply(ctx, config) {
     nativeImage: config.nativeImage || 'auto',
     visionProvider: config.visionProvider || 'deepseek-official',
     visionModel: config.visionModel || 'deepseek-v4-flash-vision-exp',
+    browserBackend: config.browserBackend || 'playwright',
+    browserHeadless: config.browserHeadless !== false,
   }
 
   if (!Number.isFinite(cfg.ttlMs) || cfg.ttlMs < 1000 || cfg.ttlMs > 600000) {
@@ -171,6 +176,7 @@ export function apply(ctx, config) {
       }
       const state = getSessionState()
       if (!state.initialized
+        && !(cfg.browserBackend === 'playwright' && toolName.startsWith('browser_'))
         && !['app_list', 'computer_status', 'computer_wait'].includes(toolName)) {
         await cuaCall('start_session', withSession())
         ownedSessions.add(withSession().session)
@@ -400,6 +406,9 @@ export function apply(ctx, config) {
     }),
   }))
 
+  for (const tool of browserTools(ctx, cfg)) {
+    register(defineTool({ ...tool, output: { ...OUT(IMAGE_FIELD), render: renderWithImage }, execute: wrap(tool.name, (args, _cfg, exec) => tool.execute(args, exec)) }))
+  }
 
   ctx.logger?.info(`dsh-computer-use: ${registered.size} 个工具已注册`)
 }

@@ -34,7 +34,7 @@ test('host-owned DSH packages are peers, not runtime dependencies', () => {
 
 test('package-lock records the same host-first dependency contract', () => {
   const root = lockfile.packages['']
-  assert.equal(root.dependencies, undefined)
+  assert.deepEqual(root.dependencies, manifest.dependencies)
   assert.deepEqual(root.peerDependencies, manifest.peerDependencies)
   assert.deepEqual(root.devDependencies, manifest.devDependencies)
 })
