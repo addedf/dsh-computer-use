@@ -34,7 +34,10 @@ import {
   click, doubleClick, rightClick, typeText, key, scroll, drag, wait, listApps, launchApp,
 } from './lib/actions.js'
 import { guard } from './lib/guard.js'
-import { cuaCall, CUA_SESSION } from './lib/cua.js'
+import { cuaCall, withSession } from './lib/cua.js'
+import { createToolScope, getSessionState } from './lib/session.js'
+import { getSnapshot, resolveWindow } from './lib/snapshot.js'
+import { registerCleanup } from './lib/lifecycle.js'
 
 export const name = 'dsh-computer-use'
 
@@ -43,7 +46,7 @@ export const inject = ['tools', 'approval']
 /** 插件配置。 */
 export const Config = z.object({
   /** 观察快照的有效期（毫秒）。 */
-  ttlMs: z.number().default(30000),
+  ttlMs: z.number().default(120000),
   /** screen_observe 最多返回多少编号元素。 */
   maxElements: z.number().default(500),
   /** 区域限制：允许操作的应用名白名单（空 = 不限制）。 */
@@ -66,6 +69,8 @@ const OUT = (extra = {}) => ({
     properties: {
       ok: { type: 'boolean', required: true },
       result: { type: 'string', required: true },
+      errorCode: { type: 'string' },
+      data: { type: 'object', additionalProperties: true },
       ...extra,
     },
   },
@@ -113,6 +118,8 @@ const TARGET_PARAMS = {
     type: 'integer',
     description: 'screen_observe 输出的元素编号（如 5）。与 x/y 二选一，优先。',
   },
+  snapshot_id: { type: 'string', description: '可选：最近一次 screen_observe 的 snapshotId，防止误用旧观察。' },
+  from_zoom: { type: 'boolean', description: '可选：x/y 来自最近一张 zoom 或 compact 图片时设 true，驱动自动映射回整窗坐标。' },
   x: {
     type: 'integer',
     description: '窗口本地截图像素 x（screen_observe 的截图坐标系，模型所见即所点）。与 element 二选一。',
@@ -125,8 +132,8 @@ const TARGET_PARAMS = {
 
 export function apply(ctx, config) {
   const cfg = {
-    ttlMs: config.ttlMs,
-    maxElements: config.maxElements,
+    ttlMs: config.ttlMs ?? 120000,
+    maxElements: config.maxElements ?? 500,
     allowedApps: Array.isArray(config.allowedApps) ? config.allowedApps : [],
     cursorTheme: config.cursorTheme,
     nativeImage: config.nativeImage || 'auto',
@@ -134,37 +141,63 @@ export function apply(ctx, config) {
     visionModel: config.visionModel || 'deepseek-v4-flash-vision-exp',
   }
 
-  // 初始化虚拟光标：声明统一会话 + 应用主题（异步，不阻塞插件加载）
-  cuaCall('start_session', { session: CUA_SESSION }).catch(() => undefined)
-  if (cfg.cursorTheme) {
-    cuaCall('set_agent_cursor_theme', { session: CUA_SESSION, theme_id: cfg.cursorTheme })
-      .catch(() => undefined)
+  if (!Number.isFinite(cfg.ttlMs) || cfg.ttlMs < 1000 || cfg.ttlMs > 600000) {
+    throw new Error('ttlMs 需要在 1000–600000 毫秒之间。')
   }
+  const runScoped = createToolScope()
+  const registered = new Map()
+  const ownedSessions = new Set()
+  registerCleanup(ctx, async () => {
+    for (const session of ownedSessions) await cuaCall('end_session', { session }).catch(() => undefined)
+    ownedSessions.clear()
+  })
+  const register = (definition) => {
+    registered.set(definition.name, definition)
+    return ctx.tools.register(definition)
+  }
+  const failed = (_toolName, err) => ({ ok: false, result: `✗ ${err.message}`, ...(err.code ? { errorCode: String(err.code) } : {}) })
 
   /** 统一包装：先过安全护栏，再执行实现（exec 透传给需要 route 的实现）。 */
-  const wrap = (toolName, impl) => async (args, exec) => {
+  const wrap = (toolName, impl) => (args, exec) => runScoped(exec, async () => {
     try {
+      if (exec?.signal?.aborted) throw Object.assign(new Error('操作已取消。'), { code: 'CANCELLED' })
+      const before = getSnapshot()
       const g = await guard(ctx, cfg, toolName, args, exec)
-      if (!g.ok) return { ok: false, result: `✗ ${g.reason}` }
+      if (!g.ok) return failed(toolName, new Error(g.reason))
+      if (exec?.signal?.aborted) throw Object.assign(new Error('操作已取消。'), { code: 'CANCELLED' })
+      if (toolName.startsWith('computer_') && !['computer_wait', 'computer_status'].includes(toolName)) {
+        if (getSnapshot() !== before) throw new Error('审批期间观察快照已变化：请重新观察。')
+        resolveWindow(cfg.ttlMs)
+      }
+      const state = getSessionState()
+      if (!state.initialized
+        && !['app_list', 'computer_status', 'computer_wait'].includes(toolName)) {
+        await cuaCall('start_session', withSession())
+        ownedSessions.add(withSession().session)
+        state.initialized = true
+        if (cfg.cursorTheme) await cuaCall('set_agent_cursor_theme', withSession({ theme_id: cfg.cursorTheme })).catch(() => undefined)
+      }
       return await impl(args, cfg, exec)
     } catch (err) {
-      return { ok: false, result: `✗ ${err.message}` }
+      return failed(toolName, err)
     }
-  }
+  })
 
-  ctx.tools.register(defineTool({
+  register(defineTool({
     name: 'screen_observe',
     description:
       '观察屏幕：对目标窗口生成"编号 + 控件 + 坐标"的界面树（AX 语义，零视觉 token 成本）。' +
       '操作电脑前必须先调用本工具取得快照；之后用 computer_click(element=[编号]) 或 computer_click(x=,y=) 操作（坐标为窗口本地截图像素）。' +
       'mode 选择：ax（默认，零成本树）/ vision（DeepSeek 视觉观察者结构化描述，免 ZHIPU key）/ native（截图直读，当前对话模型直接看图，需模型支持图片输入）。' +
       'AX 树无法解析（游戏/Canvas/Electron）时自动降级：native（若当前模型支持图片）→ vision → ax。' +
-      '快照默认 30 秒过期，过期后需重新观察。',
+      '快照默认 120 秒过期（以 ttlMs 配置为准），过期后需重新观察。',
     parameters: {
       window: {
         type: 'string',
         description: '可选：目标窗口，传 pid 数字或标题子串（如 "访达"）。缺省选最前窗口。',
       },
+      pid: { type: 'integer', description: '可选：精确指定进程，多窗口时再指定 window_id。' },
+      window_id: { type: 'integer', description: '可选：精确指定窗口，优先用于多窗口应用。' },
       mode: {
         type: 'string',
         enum: ['ax', 'vision', 'native'],
@@ -184,6 +217,8 @@ export function apply(ctx, config) {
         pid: { type: 'integer' }, windowId: { type: 'integer' },
         app: { type: 'string' }, title: { type: 'string' },
       } },
+      snapshotId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+      expiresAt: { type: 'number' },
       elementCount: { type: 'integer' },
       mode: { type: 'string' },
       elements: {
@@ -205,16 +240,15 @@ export function apply(ctx, config) {
     execute: wrap('screen_observe', (args, cfg2, exec) => screenObserve(ctx, args, cfg2, exec)),
   }))
 
-  ctx.tools.register(defineTool({
+  register(defineTool({
     name: 'screen_zoom',
     description:
       '区域截图直读：裁剪窗口某块区域（截图像素坐标）为 ≤500px JPEG 并以图片返回，当前对话模型直接看图。' +
       '用于"放大某块区域细看"（小字、图标、图表），图片 token 远小于整窗截图。' +
-      '坐标范围可用 screen_observe 的结果里的窗口截图尺寸（截图像素）估算；返回的图片即所见区域，' +
-      '之后 computer_click(x=,y=) 的坐标仍指整窗截图像素 —— 若需要点击 zoom 图内坐标，请先看参照。',
+      '返回图片含驱动留白/缩放；根据图片点击时用 computer_click(x=,y=,from_zoom=true) 由驱动映射整窗坐标。',
     parameters: {
       pid: { type: 'integer', description: '可选：目标窗口所属进程 pid（screen_observe 输出）；缺省按 window_id 解析。' },
-      window_id: { type: 'integer', required: true, description: '目标窗口 id（screen_observe 或 app_list 输出）。' },
+      window_id: { type: 'integer', description: '可选：已观察的窗口 id；省略时用当前快照。' },
       x1: { type: 'integer', description: '可选：区域左边界（整窗截图像素），默认 0。' },
       y1: { type: 'integer', description: '可选：区域上边界，默认 0。' },
       x2: { type: 'integer', description: '可选：区域右边界，默认窗口截图宽。' },
@@ -224,7 +258,7 @@ export function apply(ctx, config) {
     execute: wrap('screen_zoom', (args, cfg2, exec) => screenZoom(ctx, args, cfg2, exec)),
   }))
 
-  ctx.tools.register(defineTool({
+  register(defineTool({
     name: 'computer_click',
     description: '点击：传入 screen_observe 输出的元素编号（element），或窗口截图像素坐标（x,y）。点击的是 cua-driver 的虚拟光标，不抢真实鼠标。',
     parameters: { ...TARGET_PARAMS, count: { type: 'integer', description: '可选：点击次数，默认 1。' } },
@@ -232,7 +266,7 @@ export function apply(ctx, config) {
     execute: wrap('computer_click', (args, cfg2) => click(args, cfg2)),
   }))
 
-  ctx.tools.register(defineTool({
+  register(defineTool({
     name: 'computer_double_click',
     description: '双击：element 编号 或 x/y 坐标。',
     parameters: TARGET_PARAMS,
@@ -240,7 +274,7 @@ export function apply(ctx, config) {
     execute: wrap('computer_double_click', (args, cfg2) => doubleClick(args, cfg2)),
   }))
 
-  ctx.tools.register(defineTool({
+  register(defineTool({
     name: 'computer_right_click',
     description: '右键点击：element 编号 或 x/y 坐标。',
     parameters: TARGET_PARAMS,
@@ -248,7 +282,7 @@ export function apply(ctx, config) {
     execute: wrap('computer_right_click', (args, cfg2) => rightClick(args, cfg2)),
   }))
 
-  ctx.tools.register(defineTool({
+  register(defineTool({
     name: 'computer_type',
     description: '文本输入：向当前焦点（或指定元素）输入一段文本。若驱动拒绝后台投递，前台重试会先请求本次用户批准并可能切换窗口焦点。不要在密码框使用——密码必须由用户本人输入（敏感输入保护）。',
     parameters: {
@@ -263,7 +297,7 @@ export function apply(ctx, config) {
     })),
   }))
 
-  ctx.tools.register(defineTool({
+  register(defineTool({
     name: 'computer_key',
     description: '按键 / 快捷键：如 return、tab、escape、cmd+c、shift+tab。若驱动拒绝后台投递，前台重试会先请求本次用户批准并可能切换窗口焦点。',
     parameters: {
@@ -277,7 +311,7 @@ export function apply(ctx, config) {
     })),
   }))
 
-  ctx.tools.register(defineTool({
+  register(defineTool({
     name: 'computer_scroll',
     description: '滚动：在目标窗口内向上/下/左/右滚动。',
     parameters: {
@@ -289,7 +323,7 @@ export function apply(ctx, config) {
     execute: wrap('computer_scroll', (args, cfg2) => scroll(args, cfg2)),
   }))
 
-  ctx.tools.register(defineTool({
+  register(defineTool({
     name: 'computer_drag',
     description: '拖拽：在快照窗口内从 (from_x,from_y) 拖到 (to_x,to_y)，坐标为窗口本地截图像素。',
     parameters: {
@@ -303,17 +337,17 @@ export function apply(ctx, config) {
     execute: wrap('computer_drag', (args, cfg2) => drag(args, cfg2)),
   }))
 
-  ctx.tools.register(defineTool({
+  register(defineTool({
     name: 'computer_wait',
     description: '等待：暂停一段时间（如等待界面加载/动画完成），不调用引擎。',
     parameters: {
       ms: { type: 'integer', required: true, description: '等待毫秒数（1-60000）。' },
     },
     output: OUT(),
-    execute: wrap('computer_wait', (args) => wait(args)),
+    execute: wrap('computer_wait', (args, _cfg, exec) => wait(args, { signal: exec?.signal })),
   }))
 
-  ctx.tools.register(defineTool({
+  register(defineTool({
     name: 'app_list',
     description: '列出当前正在运行的应用（名称 + pid），用于选择要操作的目标。',
     parameters: {},
@@ -330,7 +364,7 @@ export function apply(ctx, config) {
     execute: wrap('app_list', () => listApps()),
   }))
 
-  ctx.tools.register(defineTool({
+  register(defineTool({
     name: 'app_launch',
     description: '启动一个应用（后台启动，不抢焦点；可选 bring_to_front 前置到前台）。用于"打开应用"这一步。',
     parameters: {
@@ -355,7 +389,19 @@ export function apply(ctx, config) {
     execute: wrap('app_launch', (args) => launchApp(args)),
   }))
 
-  ctx.logger?.info('dsh-computer-use: 12 个工具已注册（screen_observe / screen_zoom / computer_click / double / right / type / key / scroll / drag / wait / app_list / app_launch）')
+  register(defineTool({
+    name: 'computer_status',
+    description: '只读诊断驱动、后台服务与系统权限。首次使用或工具报错时调用；不会安装软件、触发授权弹窗或修改遥测配置。',
+    parameters: {},
+    output: OUT(),
+    execute: wrap('computer_status', async () => {
+      const report = await cuaCall('health_report', withSession())
+      return { ok: true, result: JSON.stringify(report, null, 2) }
+    }),
+  }))
+
+
+  ctx.logger?.info(`dsh-computer-use: ${registered.size} 个工具已注册`)
 }
 
 export default { name, inject, Config, apply }

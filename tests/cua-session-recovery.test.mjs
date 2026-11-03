@@ -36,3 +36,35 @@ test('does not attempt session recovery for unrelated errors', async () => {
   await assert.rejects(call('screen_observe', { pid: 42 }), /window not found/)
   assert.deepEqual(calls, [{ tool: 'screen_observe', args: { pid: 42 } }])
 })
+
+test('session recovery respects the session attached to a call', async () => {
+  const calls = []
+  const call = createCuaCall(async (tool, args) => {
+    calls.push({ tool, args })
+    if (calls.length === 1) throw endedSessionError
+    return { ok: true }
+  })
+  await call('click', { session: 'window-owner' })
+  assert.deepEqual(calls[1], { tool: 'start_session', args: { session: 'window-owner' } })
+})
+
+test('does not replay an action when session recovery itself fails', async () => {
+  const calls = []
+  const call = createCuaCall(async (tool) => {
+    calls.push(tool)
+    if (tool === 'click') throw endedSessionError
+    throw new Error('session cannot restart')
+  })
+  await assert.rejects(call('click'), /session cannot restart/)
+  assert.deepEqual(calls, ['click', 'start_session'])
+})
+
+test('does not mistake arbitrary revive wording for an ended-session refusal', async () => {
+  const calls = []
+  const call = createCuaCall(async (tool) => {
+    calls.push(tool)
+    throw new Error('delivery unknown; revive it manually')
+  })
+  await assert.rejects(call('click'), /delivery unknown/)
+  assert.deepEqual(calls, ['click'])
+})

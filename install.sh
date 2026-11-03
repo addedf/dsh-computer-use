@@ -43,7 +43,7 @@ else
       printf '    - id: dsh-computer-use\n'
       printf '      name: dsh-computer-use\n'
       printf '      config:\n'
-      printf '        ttlMs: 15000\n'
+      printf '        ttlMs: 120000\n'
       printf '        maxElements: 500\n'
     } >> "$PATCH"
     echo "  [ok] 已写入 $PATCH"

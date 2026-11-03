@@ -6,5 +6,5 @@
     - id: dsh-computer-use
       name: dsh-computer-use
       config:
-        ttlMs: 30000
+        ttlMs: 120000
         maxElements: 500

@@ -47,3 +47,27 @@ test('resolveBin keeps the official installer path ahead of legacy locations', (
   })
   assert.equal(result, official)
 })
+
+test('resolveBin finds the official macOS app bundle without a shell PATH', () => {
+  const official = '/Applications/CuaDriver.app/Contents/MacOS/cua-driver'
+  assert.equal(resolveBin({
+    platform: 'darwin', env: { PATH: '/usr/bin' }, home: '/Users/tester',
+    exists: (path) => path === official,
+  }), official)
+})
+
+test('resolveBin finds a user-installed macOS app bundle', () => {
+  const official = '/Users/tester/Applications/CuaDriver.app/Contents/MacOS/cua-driver'
+  assert.equal(resolveBin({
+    platform: 'darwin', env: { PATH: '' }, home: '/Users/tester',
+    exists: (path) => path === official,
+  }), official)
+})
+
+test('resolveBin honors a custom Windows LOCALAPPDATA installer location', () => {
+  const installed = 'D:\\AppData\\cua-driver\\cua-driver.exe'
+  assert.equal(resolveBin({
+    platform: 'win32', env: { PATH: '', LOCALAPPDATA: 'D:\\AppData' }, home: 'C:\\Users\\tester',
+    exists: (path) => path === installed,
+  }), installed)
+})

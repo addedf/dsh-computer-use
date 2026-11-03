@@ -39,6 +39,16 @@ for (const [name, action, args, tool, label] of [
     assert.equal(result.ok, true)
     assert.match(result.result, new RegExp(`${label}完成`))
   })
+
+  test(`${name} refuses nested driver errors without a false success`, async () => {
+    const result = await action(args, cfg, {
+      resolve: target,
+      call: async () => ({ status: 'refused', error: { code: 'target_changed', message: 'window identity changed' } }),
+    })
+    assert.equal(result.ok, false)
+    assert.match(result.result, /target_changed/)
+    assert.doesNotMatch(result.result, /完成/)
+  })
 }
 
 test('computer_type retries a driver-declared background failure in the foreground', async () => {
