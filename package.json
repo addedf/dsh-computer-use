@@ -43,11 +43,24 @@
     "docs/",
     "assets/",
     "verify-runtime.mjs",
-    "skills/"
+    "verify-desktop.mjs",
+    "verify-browser.mjs",
+    "skills/",
+    "verify-agent.mjs",
+    "verify-host.mjs",
+    "verify-web.mjs",
+    "verify-approval-ui.mjs"
   ],
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check index.js && node --check lib/*.js && bash -n install.sh && bash -n uninstall.sh"
+    "check": "node tools/check.mjs",
+    "doctor": "node tools/doctor.mjs",
+    "verify:desktop": "node verify-desktop.mjs",
+    "verify:browser": "node verify-browser.mjs",
+    "verify:agent": "node verify-agent.mjs",
+    "verify:host": "node verify-host.mjs",
+    "verify:web": "node verify-web.mjs",
+    "verify:approval-ui": "node verify-approval-ui.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-tools": ">=0.1.2-rc.1 <0.3",
