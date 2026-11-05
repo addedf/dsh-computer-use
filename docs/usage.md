@@ -85,14 +85,20 @@ Playwright 与 Chrome 扩展后端的普通 `browser_type({replace:true})`、`br
 
 安装与启用：
 
-1. 审阅 `chrome-extension/manifest.json` 和本项目 `PERMISSIONS.md`。扩展申请 debugger、tabs、tabGroups、nativeMessaging、storage；Chrome 会显示调试控制提示。
+1. 审阅 `chrome-extension/manifest.json` 和本项目 `PERMISSIONS.md`。扩展申请 debugger、tabs、tabGroups、nativeMessaging、storage、alarms；alarms 只负责重连唤醒，Chrome 会显示调试控制提示。
 2. `npm run browser:setup -- --dry-run` 查看本机 Native Messaging 安装计划；确认后执行 `npm run browser:setup -- --install`。它只写本用户的 DSH 桥接启动器和 Chrome NativeMessagingHosts 清单，清单只允许这一扩展 ID。
-3. 在 Chrome 扩展管理器中加载本仓库的 `chrome-extension` 目录。此步骤需要用户明确批准扩展权限，不自动安装扩展或重启 Chrome。
-4. 把宿主中本插件的 `browserBackend` 设为 `chrome-extension` 并正式重载。插件先准备私有本机桥接，然后在扩展图标菜单点击“连接”，再发起浏览器任务。
+3. 在 Chrome 扩展管理器中加载本仓库的 `chrome-extension` 目录。此步骤需要用户明确批准扩展权限，不自动安装扩展或重启 Chrome；新安装随后自动启用本机连接，不打开额外页面或弹窗。
+4. 把宿主中本插件的 `browserBackend` 设为 `chrome-extension` 并正式重载。插件准备私有本机桥接后，扩展在后台完成握手。旧版升级且尚未保存连接偏好时，只需在面板点一次“授权并连接”。面板显示已连接后即可发起浏览器任务。
 
-扩展工具栏图标显示活动会话数量；点击图标可查看状态、停止或断开。停止会撤销该会话的控制并取消当前 DSH Agent，旧 ref 和已结束的驱动会话不能恢复它。用户把标签移出专属分组、关闭标签或调试连接中断，也会停止控制。停止为终止本次控制；请在 DSH 新建会话开始下一任务。
+连接偏好保存在当前 Chrome profile 的扩展本机存储中。之后启动 Chrome、扩展后台重新加载或 DSH 重启，均自动建立连接；DSH 尚未启动时面板显示等待，启动后自行接通。连接异常会退避重试，只有本机桥接确认握手后才显示已连接。面板“撤销授权”先保存关闭偏好，再停止任务并断开；重新打开 Chrome 或更新扩展不会自动重新授权。
 
-升级后若提示 `CHROME_EXTENSION_UPDATE_REQUIRED`，打开扩展弹窗的能力提示。若为“本地文件已更新，后台服务未刷新”，在 `chrome://extensions` 中把 **DSH Chrome Control 卡片的开关关闭再打开**，再点击“连接本机 DSH”；确认显示“本地与后台一致”后继续。若提示“本地扩展文件未更新”，先核对加载的扩展目录。宿主在扩展声明后台操作和取消分组的能力前拒绝建立控制端点或新建标签，避免继续运行旧版逻辑。
+扩展工具栏图标显示活动会话数量；弹窗只保留页头、连接授权状态和授权／重试／撤销入口。任务操作在 DSH 中进行，弹窗不显示当前任务、已停止记录或权限详情。停止会撤销该会话的控制并取消当前 DSH Agent，旧 ref 和已结束的驱动会话不能恢复它。用户把标签移出专属分组、关闭标签或调试连接中断，也会停止控制。停止为终止本次控制；请在 DSH 新建会话开始下一任务。停止任务不撤销本机连接授权，自动重连也不恢复旧任务。
+
+升级后若提示 `CHROME_EXTENSION_UPDATE_REQUIRED`，先核对加载的扩展目录，再在 `chrome://extensions` 中重新加载 **DSH Chrome Control**，并重载 DSH 插件；已有授权会自动连接，旧版首次迁移需点一次“授权并连接”。宿主仍在建立控制端点或新建标签前校验后台操作、取消分组和并行传输能力，弹窗不显示这些技术详情。
+
+此次自动连接升级增加了本机握手确认，需同时重新加载扩展与 DSH 插件。只更新扩展而宿主仍运行旧桥接时会保持等待状态；无需反复授权，应先完成宿主重载。
+
+本轮参考 [OpenAI 官方浏览器扩展说明](https://learn.chatgpt.com/docs/chrome-extension) 中的后台标签操作、Native Messaging 和可管理授权体验。DSH 当前只控制新建登记页；现有页面引用、侧边聊天、网站允许/阻止列表及自动文件传输尚未接入，不因记住本机连接而宣称支持这些能力。Chrome 自身显示的调试控制提示仍然保留。
 
 `browser_close`、任务完成、取消或退出都会释放本次控制，清除活动标记，保留页面并取消本次己方标签的分组。最后一个成员被移出后，空分组自动消失；用户自行加入的标签、移到其它分组的页面均保持原样。取消分组不激活或选择标签。绝不关闭用户整个 Chrome。自动上传和受宿主管理的下载暂不支持，`browser_capabilities.files` 两项均为 false；需要文件操作时请用户在可见页面手动完成，不能改用其它工具绕过宿主策略。网页仍遵循当前 Chrome 的常规网络、权限及原生下载行为。独立 Playwright 模式的文件授权和传输规则不变。
 
