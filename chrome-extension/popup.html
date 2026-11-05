@@ -1,22 +1,25 @@
 <!doctype html>
 <html lang="zh-CN">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width">
-<title>DSH Chrome 控制</title>
-<link rel="stylesheet" href="popup.css">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>DSH · Chrome</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
 <body>
-  <header><img src="icon.svg" width="32" height="32" alt=""><div><h1>DSH Chrome 控制</h1><p id="connection" role="status">正在读取状态…</p></div></header>
-  <p class="description">默认在当前 Chrome 的专属分组中后台操作。</p>
-  <section aria-live="polite" aria-label="扩展控制能力">
-    <p id="compatibility-summary" class="hint">正在核对本地与后台控制能力…</p>
-    <p id="compatibility-local" class="hint" hidden></p>
-    <p id="compatibility-worker" class="hint" hidden></p>
-  </section>
-  <div class="actions"><button id="connect">连接本机 DSH</button><button id="stop-all" class="danger" disabled>停止全部控制</button></div>
-  <p id="error" role="alert" hidden></p>
-  <div id="sessions" aria-live="polite"></div>
-  <p class="hint">任务结束或停止后保留页面，并取消本次页面的分组；空分组自动移除。停止后请在 DSH 新建会话开始下一任务。</p>
-  <p class="hint">仅控制 DSH 新建的分组页面，不读取 Cookie、密码库或浏览历史。自动上传和下载暂未接通，可在当前页面手动完成。</p>
+  <header class="brand">
+    <span class="brand-icon" aria-hidden="true"><img src="icon.svg" width="28" height="28" alt=""></span>
+    <div><h1>DSH <span>/ Chrome</span></h1><p>浏览器助手</p></div>
+    <span class="local-label">本机连接</span>
+  </header>
+  <main>
+    <section id="connection-card" class="connection-card" aria-label="连接状态">
+      <div class="status-line"><span id="status-dot" class="status-dot" aria-hidden="true"></span><p id="connection" role="status">正在读取状态…</p></div>
+      <p id="connection-note" class="connection-note">首次授权后，下次自动连接，无需重复操作。</p>
+      <div class="connection-actions"><button id="connect" class="connect-button" disabled>授权并连接</button><button id="revoke-offline" class="text-button revoke" hidden>撤销授权</button></div>
+      <p id="error" role="alert" hidden></p>
+    </section>
+  </main>
   <script type="module" src="popup.js"></script>
 </body>
 </html>

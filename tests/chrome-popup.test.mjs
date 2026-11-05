@@ -3,133 +3,97 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-test('popup polling preserves the live Stop button and recovers its view after errors',()=>{
-  const popup=fileURLToPath(new URL('../chrome-extension/popup.js',import.meta.url))
-  const script=String.raw`
-import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import vm from 'node:vm'
-import {pathToFileURL} from 'node:url'
-class Element{
-  children=[];dataset={};listeners=new Map();hidden=false;replacements=0
-  constructor(tagName=''){this.tagName=tagName}
-  addEventListener(name,callback){this.listeners.set(name,callback)}
-  replaceChildren(...children){this.children=children;this.replacements++}
-  append(...children){this.children.push(...children)}
-}
-const elements=new Map(['connection','connect','stop-all','error','sessions','compatibility-summary','compatibility-local','compatibility-worker'].map((id)=>[id,new Element()]))
-const document={hidden:false,getElementById:(id)=>elements.get(id),createElement:(tagName)=>new Element(tagName)}
-const state={ok:true,connected:true,connectionError:'',sessions:[{owner:'owned-task',title:'Visible test',stopped:false,tabCount:2}],blockedOwners:[]}
-let poll,failed=false;const requests=[]
-const chrome={runtime:{async sendMessage(message){requests.push(message);if(failed)throw new Error('Worker temporarily unavailable');if(message.action==='stop')state.sessions[0].stopped=true;return structuredClone(state)}}}
-const context=vm.createContext({document,chrome,setTimeout,clearTimeout,setInterval:(callback)=>{poll=callback},console})
-const cache=new Map()
-async function load(identifier){if(cache.has(identifier))return cache.get(identifier);const module=new vm.SourceTextModule(fs.readFileSync(new URL(identifier),'utf8'),{context,identifier});cache.set(identifier,module);await module.link((specifier,referrer)=>load(new URL(specifier,referrer.identifier).href));return module}
-const entry=await load(pathToFileURL(process.argv[1]).href);await entry.evaluate()
-const flush=()=>new Promise(setImmediate)
-await flush()
-const list=elements.get('sessions'),first=list.children[0].children.at(-1)
-assert.equal(first.textContent,'停止控制');assert.equal(list.replacements,1)
-poll();await flush();poll();await flush()
-assert.equal(list.children[0].children.at(-1),first,'Unchanged polls must preserve the exact live button')
-assert.equal(list.replacements,1)
-failed=true;poll();await flush()
-assert.equal(elements.get('connection').textContent,'扩展连接未就绪');assert.equal(elements.get('error').hidden,false)
-failed=false;poll();await flush()
-assert.equal(elements.get('connection').textContent,'已连接本机 DSH');assert.equal(elements.get('error').hidden,true)
-assert.equal(list.replacements,2,'Recovery must repaint even when the restored state matches the old fingerprint')
-const recovered=list.children[0].children.at(-1)
-poll();await flush();assert.equal(list.children[0].children.at(-1),recovered)
-recovered.listeners.get('click')();await flush()
-assert.ok(requests.some((request)=>request.action==='stop'&&request.owner==='owned-task'))
-assert.equal(list.children[0].children.at(-1).textContent,'该任务控制已停止，请在 DSH 新建会话开始下一任务。')
-assert.equal(list.children[0].children.some((element)=>element.tagName==='button'),false,'Stopped tasks must not offer a misleading Resume button')
-assert.equal(elements.get('stop-all').disabled,true)
-state.sessions=[];state.blockedOwners=['prior-stopped-task'];poll();await flush()
-assert.equal(list.children[0].children.at(-1).textContent,'该任务控制已停止，请在 DSH 新建会话开始下一任务。')
-assert.equal(list.children[0].children.some((element)=>element.tagName==='button'),false,'Persisted stopped tasks must not offer Resume either')
-assert.equal(requests.some((request)=>request.action==='resume'),false)
-console.log('popup identity and recovery passed')
-`
-  const result=execFileSync(process.execPath,['--experimental-vm-modules','--input-type=module','-e',script,popup],{encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']})
-  assert.match(result,/popup identity and recovery passed/)
-})
-
-const diagnosticHarness=String.raw`
+const harness=String.raw`
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import vm from 'node:vm'
 import {pathToFileURL} from 'node:url'
 const scenario=process.argv[2]
 class Element{
-  children=[];dataset={};listeners=new Map();hidden=false;replacements=0
-  constructor(tagName=''){this.tagName=tagName}
+  dataset={};listeners=new Map();hidden=false
   addEventListener(name,callback){this.listeners.set(name,callback)}
-  replaceChildren(...children){this.children=children;this.replacements++}
-  append(...children){this.children.push(...children)}
 }
-const elements=new Map(['connection','connect','stop-all','error','sessions','compatibility-summary','compatibility-local','compatibility-worker'].map((id)=>[id,new Element()]))
-const document={hidden:false,getElementById:(id)=>elements.get(id),createElement:(tag)=>new Element(tag)}
-const latest={background:true,focusPolicy:'preserve-user-focus',releasePolicy:'ungroup-preserve-tabs',transportConcurrency:'parallel-rpc'}
-const old={visible:true,tabGroups:true}
-const state={ok:true,connected:true,sessions:[{owner:'own-task',title:'Acceptance',tabCount:1}],blockedOwners:[],capabilities:scenario==='worker-old'?old:latest}
-let poll,failed=scenario==='read-failure';const requests=[]
-const chrome={runtime:{async sendMessage(message){requests.push(message);if(failed)throw new Error('Worker unavailable');return structuredClone(state)}}}
+const popupHtml=fs.readFileSync(new URL('popup.html',pathToFileURL(process.argv[1])),'utf8')
+const elements=new Map([...popupHtml.matchAll(/id="([^"]+)"/g)].map((match)=>[match[1],new Element()]))
+const document={hidden:false,getElementById:(id)=>elements.get(id)}
+const state={ok:true,connected:false,connecting:false,autoConnect:false,connectionError:''}
+if(scenario==='offline')Object.assign(state,{autoConnect:true,connectionError:'Specified native messaging host not found.'})
+if(scenario==='slow-status'||scenario==='recovery')Object.assign(state,{autoConnect:true,connected:true})
+if(scenario==='connecting')Object.assign(state,{autoConnect:true,connecting:true})
+let poll,holdStatus=false,resolveStatus,failed=false;const requests=[]
+const chrome={runtime:{async sendMessage(message){
+  requests.push(message)
+  if(failed)throw new Error('Worker temporarily unavailable')
+  if(message.action==='status'&&holdStatus){const stale=structuredClone(state);return new Promise((resolve)=>{resolveStatus=()=>resolve(stale)})}
+  if(message.action==='connect')Object.assign(state,{autoConnect:true,connected:true,connecting:false,connectionError:''})
+  if(message.action==='disconnect')Object.assign(state,{autoConnect:false,connected:false,connecting:false,connectionError:''})
+  return structuredClone(state)
+}}}
 const context=vm.createContext({document,chrome,setTimeout,clearTimeout,setInterval:(callback)=>{poll=callback},console})
 const cache=new Map()
-async function load(identifier){
-  if(cache.has(identifier))return cache.get(identifier)
-  if(scenario==='local-old'&&identifier.endsWith('/broker.js')){
-    const module=new vm.SyntheticModule(['CAPABILITIES'],function(){this.setExport('CAPABILITIES',old)},{context,identifier})
-    cache.set(identifier,module);return module
-  }
-  const module=new vm.SourceTextModule(fs.readFileSync(new URL(identifier),'utf8'),{context,identifier})
-  cache.set(identifier,module);await module.link((specifier,referrer)=>load(new URL(specifier,referrer.identifier).href));return module
-}
+async function load(identifier){if(cache.has(identifier))return cache.get(identifier);const module=new vm.SourceTextModule(fs.readFileSync(new URL(identifier),'utf8'),{context,identifier});cache.set(identifier,module);await module.link((specifier,referrer)=>load(new URL(specifier,referrer.identifier).href));return module}
 const entry=await load(pathToFileURL(process.argv[1]).href);await entry.evaluate()
 const flush=()=>new Promise(setImmediate)
 await flush()
-const summary=elements.get('compatibility-summary'),local=elements.get('compatibility-local'),worker=elements.get('compatibility-worker')
-if(scenario==='local-old'){
-  assert.match(summary.textContent,/本地扩展文件未更新/)
-  assert.doesNotMatch(summary.textContent,/后台服务未刷新/)
-  assert.match(local.textContent,/background=缺失.*focusPolicy=缺失.*releasePolicy=缺失/)
-  assert.match(worker.textContent,/background=true.*focusPolicy=preserve-user-focus.*releasePolicy=ungroup-preserve-tabs/)
-  assert.equal(local.hidden,false);assert.equal(worker.hidden,false)
-}else if(scenario==='worker-old'){
-  assert.match(summary.textContent,/本地文件已更新，后台服务未刷新/)
-  assert.match(local.textContent,/background=true.*focusPolicy=preserve-user-focus.*releasePolicy=ungroup-preserve-tabs/)
-  assert.match(worker.textContent,/background=缺失.*focusPolicy=缺失.*releasePolicy=缺失/)
-  assert.equal(worker.hidden,false)
-}else if(scenario==='latest'){
-  assert.match(summary.textContent,/后台操作 · 保留前台 · 结束取消分组.*本地与后台一致/)
-  assert.equal(local.hidden,true);assert.equal(worker.hidden,true)
-  const list=elements.get('sessions'),button=list.children[0].children.at(-1),replacements=list.replacements
-  state.capabilities={...latest,releasePolicy:'collapse-preserve-tabs'};poll();await flush()
-  assert.match(summary.textContent,/后台服务未刷新/)
-  assert.match(worker.textContent,/releasePolicy=collapse-preserve-tabs/)
-  assert.equal(list.children[0].children.at(-1),button,'Capability diagnosis must preserve the existing Stop node')
-  assert.equal(list.replacements,replacements)
-  state.capabilities=latest;poll();await flush()
-  assert.match(summary.textContent,/本地与后台一致/)
-  assert.equal(list.children[0].children.at(-1),button)
-  assert.equal(worker.hidden,true)
-}else if(scenario==='read-failure'){
-  assert.match(summary.textContent,/本地文件已更新，后台能力读取失败/)
-  assert.doesNotMatch(summary.textContent,/后台服务未刷新/)
-  assert.match(local.textContent,/releasePolicy=ungroup-preserve-tabs/)
-  assert.equal(worker.textContent,'运行后台：未取得能力信息')
+assert.equal(JSON.stringify(requests),JSON.stringify([{action:'status'}]),'Opening the popup only reads status; it must not grant trust implicitly')
+const connect=elements.get('connect'),revoke=elements.get('revoke-offline')
+if(scenario==='permission'){
+  assert.equal(connect.textContent,'授权并连接')
+  assert.equal(revoke.hidden,true)
+  await connect.listeners.get('click')();await flush()
+  assert.equal(requests.at(-1).action,'connect')
+  assert.equal(connect.textContent,'撤销授权')
+  assert.equal(connect.dataset.action,'disconnect')
+  poll();await flush()
+  assert.equal(requests.filter((message)=>message.action==='connect').length,1)
+  await connect.listeners.get('click')();await flush()
+  assert.equal(requests.at(-1).action,'disconnect')
+  assert.equal(connect.textContent,'授权并连接')
+  assert.equal(connect.dataset.action,'connect')
+}else if(scenario==='offline'){
+  assert.equal(connect.textContent,'立即重试')
+  assert.equal(revoke.hidden,false,'Persisted trust must be revocable even when the host is offline')
+  assert.match(elements.get('error').textContent,/扩展会自动重试/)
+  assert.doesNotMatch(elements.get('error').textContent,/Specified/,'Native transport details must not appear in the popup')
+  await revoke.listeners.get('click')();await flush()
+  assert.equal(requests.at(-1).action,'disconnect')
+  assert.equal(revoke.hidden,true)
+  assert.equal(connect.textContent,'授权并连接')
+}else if(scenario==='connecting'){
+  assert.equal(elements.get('connection').textContent,'正在连接本机 DSH')
+  assert.equal(connect.textContent,'撤销授权')
+  assert.equal(connect.dataset.action,'disconnect')
+  await connect.listeners.get('click')();await flush()
+  assert.equal(requests.at(-1).action,'disconnect')
+  assert.equal(elements.get('connection').textContent,'尚未授权连接')
+}else if(scenario==='slow-status'){
+  holdStatus=true;poll();await flush()
+  assert.equal(connect.disabled,false,'Status polling must not disable a focused authorization button')
+  await connect.listeners.get('click')();await flush()
+  assert.equal(requests.at(-1).action,'disconnect','A slow status read must not swallow revocation')
+  assert.equal(elements.get('connection').textContent,'尚未授权连接')
+  resolveStatus();await flush()
+  assert.equal(elements.get('connection').textContent,'尚未授权连接','A stale poll response must not repaint revoked authorization as connected')
+  assert.equal(connect.textContent,'授权并连接')
+}else if(scenario==='recovery'){
+  failed=true;poll();await flush()
+  assert.equal(elements.get('connection').textContent,'扩展连接未就绪')
   assert.equal(elements.get('error').hidden,false)
-}else throw new Error('Unknown diagnostic scenario')
-assert.equal(requests.every((request)=>request.action==='status'),true,'Diagnostics must not request mutations or worker reload')
-console.log('diagnostic passed')
+  failed=false;poll();await flush()
+  assert.equal(elements.get('connection').textContent,'已连接本机 DSH')
+  assert.equal(elements.get('error').hidden,true)
+  assert.equal(connect.textContent,'撤销授权')
+}else throw new Error('Unknown popup scenario')
+assert.equal(requests.every((message)=>['status','connect','disconnect'].includes(message.action)),true)
+console.log('popup passed')
 `
-function checkDiagnostic(scenario){
+function checkPopup(scenario){
   const popup=fileURLToPath(new URL('../chrome-extension/popup.js',import.meta.url))
-  const result=execFileSync(process.execPath,['--experimental-vm-modules','--input-type=module','-e',diagnosticHarness,popup,scenario],{encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']})
-  assert.match(result,/diagnostic passed/)
+  const result=execFileSync(process.execPath,['--experimental-vm-modules','--input-type=module','-e',harness,popup,scenario],{encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']})
+  assert.match(result,/popup passed/)
 }
-test('popup distinguishes stale bundled files from a new running worker',()=>checkDiagnostic('local-old'))
-test('popup identifies a stale running worker despite new bundled files',()=>checkDiagnostic('worker-old'))
-test('popup confirms matching capabilities and changes diagnostics without replacing Stop',()=>checkDiagnostic('latest'))
-test('popup reports unavailable worker capabilities separately from outdated versions',()=>checkDiagnostic('read-failure'))
+test('popup distinguishes first authorization, automatic connection and revocation',()=>checkPopup('permission'))
+test('popup lets an offline user revoke automatic connection authorization',()=>checkPopup('offline'))
+test('popup allows revoking authorization while the native handshake is pending',()=>checkPopup('connecting'))
+test('popup allows revocation during a slow status poll and ignores the stale reply',()=>checkPopup('slow-status'))
+test('popup recovers connection status after a temporary worker failure',()=>checkPopup('recovery'))

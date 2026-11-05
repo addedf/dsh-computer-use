@@ -1,1 +1,38 @@
-:root{font:13px/1.5 system-ui,sans-serif;color:#202027;background:#faf9ff;color-scheme:light}body{width:340px;margin:0;padding:18px}header{display:flex;align-items:center;gap:10px}h1{font-size:16px;margin:0}p{margin:5px 0}.description{margin:14px 0}.actions{display:flex;gap:8px}button{font:inherit;border:0;background:#7050e8;color:white;border-radius:8px;padding:9px 12px;cursor:pointer}button:disabled{opacity:.45;cursor:default}.danger{background:#b33449}.hint{font-size:11px;color:#65616f;margin-top:12px}#error{color:#a3243b;margin:12px 0;overflow-wrap:anywhere}.session{border:1px solid #ddd6f7;border-radius:9px;background:white;padding:10px;margin-top:12px}.session h2{font-size:13px;margin:0 0 5px}.session p{color:#65616f;font-size:12px;overflow-wrap:anywhere}.session button{margin-top:7px;padding:6px 11px}.session.stopped{border-color:#d4d1da}
+:root {
+  font: 13px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #252525;
+  background: #fff;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+body { width: 376px; margin: 0; padding: 20px; }
+[hidden] { display: none !important; }
+p, h1 { margin: 0; }
+button { -webkit-tap-highlight-color: transparent; }
+button { font: inherit; cursor: pointer; transition: background .15s; }
+button:disabled { cursor: default; opacity: .5; }
+button:focus-visible { outline: 2px solid #585858; outline-offset: 3px; }
+.brand { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
+.brand-icon { display: flex; align-items: center; justify-content: center; width: 38px; height: 38px; border: 1px solid #ededed; border-radius: 12px; background: #fafafa; }
+.brand-icon img { filter: grayscale(1); }
+.brand h1 { font-size: 16px; font-weight: 650; letter-spacing: -.35px; }
+.brand h1 span { font-weight: 400; color: #8b8b8b; }
+.brand p { margin-top: 1px; color: #8a8a8a; font-size: 11px; }
+.local-label { margin-left: auto; font-size: 10px; color: #777; border: 1px solid #e9e9e9; border-radius: 5px; padding: 2px 6px; }
+.connection-card { border: 1px solid #e7e7e7; border-radius: 14px; padding: 16px; background: #fafafa; }
+.status-line { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #b4b4b4; flex: none; }
+.status-dot[data-state="connected"] { background: #24966c; box-shadow: 0 0 0 3px #24966c12; }
+.status-dot[data-state="connecting"] { background: #c68e2d; }
+.status-dot[data-state="error"] { background: #bd5f43; }
+.connection-note { color: #777; font-size: 12px; margin-top: 7px; }
+.connection-actions { display: flex; align-items: center; gap: 14px; margin-top: 14px; }
+.connect-button { border: 1px solid #252525; border-radius: 8px; padding: 8px 13px; background: #252525; color: #fff; font-size: 12px; font-weight: 500; }
+.connect-button:hover:not(:disabled) { background: #454545; }
+.connect-button[data-action="disconnect"] { border-color: #dedede; background: #fff; color: #666; padding: 6px 10px; font-size: 11px; }
+.connect-button[data-action="disconnect"]:hover:not(:disabled) { background: #efefef; color: #333; }
+#error { color: #a04a35; font-size: 12px; margin-top: 12px; }
+.text-button { border: 0; padding: 2px 0; background: none; font-size: 11px; }
+.revoke { color: #888; }
+.text-button:hover:not(:disabled) { color: #444; text-decoration: underline; }
+@media (prefers-reduced-motion: reduce) { button { transition: none; } }
