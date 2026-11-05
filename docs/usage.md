@@ -10,7 +10,7 @@
 
 `computer_verify` / `computer_wait_for` 检查已观察的精确窗口；`browser_verify` / `browser_wait_for` 刷新本会话网页后检查条件。仅 `status:satisfied`、`matched:true` 才通过；unknown、截断、隐藏值和歧义不当作成功。
 
-等待参数为 `timeout_ms`（0–10000，默认5000）、`interval_ms`（50–1000，默认200）、`stable_samples`（1–5，默认2）。正在进行的读取会等待其有界超时后处理取消，避免后台悬挂读取使后续引用失效。
+等待参数为 `timeout_ms`（0–10000，默认5000）、`interval_ms`（50–1000，默认200）、`stable_samples`（1–5，默认2）。桌面 CUA 调用接收当前步骤的取消信号，取消会终止正在执行的 CLI；其它适配器仍可能等待其有界读取结束。已投递的动作不会因取消而自动撤销。
 
 ```json
 {"expect":[{"kind":"value","role":"textbox","name":"姓名","value":"示例用户"}],"timeout_ms":5000}
@@ -48,7 +48,7 @@
 - `{for_each:[...],as:"item",steps:[...]}`：最多20项，当前项可用 `{$ref:"item"}`。
 - `{when:{ref:"flag",equals:true},steps:[...],otherwise:[...]}`：条件分支。
 
-每组1–20步，嵌套最多3层，整个流程最多60次工具调用、120秒预算。取消信号传给子工具，并等待已开始工作结束。任一步失败立即停止，不重放已有动作。不执行任意 JavaScript。宿主启用 PTC 时，也可使用其工具 SDK 处理结构化 `data`。
+每组1–20步，嵌套最多3层，整个流程最多60次工具调用、120秒预算。取消信号传给子工具和 CUA 执行进程，再完成所属资源清理。任一步失败立即停止，不重放已有动作。不执行任意 JavaScript。宿主启用 PTC 时，也可使用其工具 SDK 处理结构化 `data`。
 
 ## 浏览器后端
 
@@ -59,7 +59,64 @@ config:
   ttlMs: 120000
 ```
 
-默认 Playwright 后端通过 playwright-core 和本机 Chrome 创建独立临时浏览器，不下载浏览器、不接管用户已有 Chrome。默认 headless，不操作真实鼠标或前台窗口。截图用 browser_screenshot。需要可见浏览器时配置 browserHeadless:false，窗口可能显示，应在适合的桌面会话使用。
+默认 Playwright 后端通过 playwright-core 和本机 Chrome 创建独立临时浏览器，不下载浏览器、不接管用户已有 Chrome。默认 headless，不操作真实鼠标或前台窗口。截图用 browser_screenshot。配置 browserHeadless:false 后会显示独立窗口；这不继承用户登录态。
+
+### 大页面采集预算
+
+Playwright 与 Chrome 扩展后端按节点遍历页面，只为当前返回的目标创建元素句柄。输出遍历与全页安全检查分别限额，所有 frame 共用总时限：
+
+| 配置 | 默认值 | 范围与含义 |
+| --- | --- | --- |
+| `browserObservationMaxNodes` | `10000` | 输出遍历节点数，100–100000；独立于返回条数 `maxElements` |
+| `browserObservationSafetyMaxNodes` | `10000` | 全页安全扫描节点数，100–100000；query、scope 和续页仍须执行 |
+| `browserObservationTimeoutMs` | `5000` | 整次观察时限，100–30000ms；包含跨 frame 采集、标题和句柄处理 |
+
+返回的 `data.observationBudget` 给出两类 `visitedNodes`、配置限额及 `stopReason/stopReasons`。预算用尽时 `complete:false`、`truncated:true`；全页安全检查未完成时还会设置 `safetyComplete:false`、`inputBlocked:true`，隐藏字段值与可能含输入值的摘要，不将局部查询当作整页已安全。
+
+有 `continuation` 时原样传回下一次观察，保留 query/scope；续页从原页面绑定的遍历位置继续，每次重新进行安全扫描，不能把前后多次扫描拼成输入授权。页面导航、frame 变化、超时或取消会使旧遍历位置失效。总时限能停止宿主等待，已经发出的只读浏览器 RPC 可能稍后结束；晚到结果仅释放句柄，不替换当前观察或启动后续采集。
+
+Playwright 与 Chrome 扩展后端的普通 `browser_type({replace:true})`、`browser_select` 在一次写入后有界读回验证，不自动补写。检查 `data.effect` 和 `data.verification.status`：`verified/matched` 表示当前控件值匹配；`unverifiable/mismatch` 返回失败，表示已投递但值未匹配；读回不可用或目标变化也保持 `unverifiable`，不能当作业务完成。追加输入只返回 `delivered`。回验不返回字段实际值；服务端保存等结果仍需 `browser_verify` 或独立页面证据。输入触发 `dialogPending:true` 时先用 `browser_dialog` 处理，不重放输入。
+
+截图附件必须保留驱动图片或浏览器 viewport 的原始宽高；尺寸不一致时明确拒绝坐标授权。浏览器截图采集、保存或审批期间页面变化也会拒绝，原文档重载后须重新截图。原生紧凑图仍通过驱动 `from_zoom:true` 转换，不能自行按比例猜测。开源机制来源与未接入的后续方向见 [调研记录](open-source-reuse.md)。
+
+### 在当前 Chrome 的可见分组中操作
+
+`browserBackend: chrome-extension` 使用配套的 **DSH Chrome Control** 扩展，复用当前 Chrome 登录状态。每个 DSH 会话只拥有自己新建的紫色标签分组及登记的标签；用户已有页面不自动加入，不导出 Cookie 或读取 profile 数据库。新标签在后台建立，选择操作目标只改变 DSH 内部目标，不激活标签或把 Chrome 窗口切到前台。你可以自行展开分组查看。
+
+安装与启用：
+
+1. 审阅 `chrome-extension/manifest.json` 和本项目 `PERMISSIONS.md`。扩展申请 debugger、tabs、tabGroups、nativeMessaging、storage；Chrome 会显示调试控制提示。
+2. `npm run browser:setup -- --dry-run` 查看本机 Native Messaging 安装计划；确认后执行 `npm run browser:setup -- --install`。它只写本用户的 DSH 桥接启动器和 Chrome NativeMessagingHosts 清单，清单只允许这一扩展 ID。
+3. 在 Chrome 扩展管理器中加载本仓库的 `chrome-extension` 目录。此步骤需要用户明确批准扩展权限，不自动安装扩展或重启 Chrome。
+4. 把宿主中本插件的 `browserBackend` 设为 `chrome-extension` 并正式重载。插件先准备私有本机桥接，然后在扩展图标菜单点击“连接”，再发起浏览器任务。
+
+扩展工具栏图标显示活动会话数量；点击图标可查看状态、停止或断开。停止会撤销该会话的控制并取消当前 DSH Agent，旧 ref 和已结束的驱动会话不能恢复它。用户把标签移出专属分组、关闭标签或调试连接中断，也会停止控制。停止为终止本次控制；请在 DSH 新建会话开始下一任务。
+
+升级后若提示 `CHROME_EXTENSION_UPDATE_REQUIRED`，打开扩展弹窗的能力提示。若为“本地文件已更新，后台服务未刷新”，在 `chrome://extensions` 中把 **DSH Chrome Control 卡片的开关关闭再打开**，再点击“连接本机 DSH”；确认显示“本地与后台一致”后继续。若提示“本地扩展文件未更新”，先核对加载的扩展目录。宿主在扩展声明后台操作和取消分组的能力前拒绝建立控制端点或新建标签，避免继续运行旧版逻辑。
+
+`browser_close`、任务完成、取消或退出都会释放本次控制，清除活动标记，保留页面并取消本次己方标签的分组。最后一个成员被移出后，空分组自动消失；用户自行加入的标签、移到其它分组的页面均保持原样。取消分组不激活或选择标签。绝不关闭用户整个 Chrome。自动上传和受宿主管理的下载暂不支持，`browser_capabilities.files` 两项均为 false；需要文件操作时请用户在可见页面手动完成，不能改用其它工具绕过宿主策略。网页仍遵循当前 Chrome 的常规网络、权限及原生下载行为。独立 Playwright 模式的文件授权和传输规则不变。
+
+后台指针操作在投递前重新核对可见、启用、未遮挡和目标身份，并用宿主计时两次取样检查位置；不依赖后台页面可能暂停的动画帧。屏外、移动或已变化的目标需滚动后重新观察。当前 Chrome 的 iframe 指针目标因无法完整验证外层命中而明确返回 `BROWSER_BACKGROUND_FRAME_UNSUPPORTED`；不要改用桌面点击绕过。独立 Playwright 行为保持原样。
+
+Native 请求独立响应，挂起的页面求值不会挡住关闭或其它会话；同一控制连接的输入命令按顺序确认，避免鼠标抬起先于按下。输入失败会撤销本次控制，排队输入不再投递。取消会立即释放本次 CDP 连接，再完成所属资源清理。扩展实际后台需声明 `transportConcurrency:parallel-rpc`，缺失时拒绝创建新控制目标。
+
+桥接只对已登记页面启用 Chrome 的页面焦点模拟，使后台页面能处理渲染和输入；不选择标签、不激活窗口，释放调试连接时取消模拟。页面内的 `document.hasFocus()` 或可见性值可能受模拟影响，不能用来证明电脑前台是否切换；前台保持应核对操作系统与实际活动标签。
+
+当前 Chrome 的声明式新窗口链接应使用 `browser_tabs({action:"open_link",ref})`。Chrome 后台 Meta/Cmd 点击可能把新页来源标成用户当前活动标签，因此无法据此安全认领新页；本模式在任何此类点击前明确拒绝并给出打开链接的提示。`open_link` 是读取已核验 href 后在正式登记的新页导航，不执行页面点击脚本；下载链接、非 HTTP(S) 和 URL 内凭据均拒绝。普通同页控件仍走原生点击。
+
+Native Messaging 安装器目前支持 macOS/Linux；未完成安装、连接或平台不支持时明确失败，不回退到用户看不到的浏览器。它不需要给现有 Chrome 开启全局远程调试端口。
+
+### 原生桌面状态与任务清理
+
+`desktopIndicator` 默认关闭，不显示常驻 DSH 浮层。桌面动作期间可显示驱动虚拟光标，空闲约一秒隐藏；任务完成、取消、异常或插件卸载时，禁用本会话光标并结束己方驱动会话，不影响其它会话。
+
+`computer_status()` 保留健康诊断；`computer_status({scope:"control"})` 通过驱动只读查询本任务的生命周期和虚拟光标状态，并提供带来源和时间的最近释放记录。工具固定查询本会话，不接受其它会话编号，不会创建、恢复会话或刷新光标活动。已结束会话的实时读取可能被驱动拒绝，错误会如实保留；释放记录与实时状态分别呈现。光标可见性以驱动实际返回为准，读取错误或缺失字段保持未知；窗口截图不保证包含独立光标叠层，不能仅凭截图中没有箭头判断清理成功。
+
+`computer_status({scope:"capabilities"})` 或 `npm run doctor` 进行只读驱动握手：核对实际可执行文件、工具 schema 和运行中驱动的 SHA256。`transport:ok` 只表示诊断请求成功，桌面是否就绪看 `readiness` 与健康检查；`degraded`、跳过检查或未知能力不能当作全部可用。握手使用3秒总预算，缓存60秒并绑定实际文件身份，文件替换或缓存失效后旧观察须重新获取；版本号不作为功能支持依据。
+
+`screen_observe` 自动完成缓存握手。明确不支持的功能提前拒绝；元数据缺失或整体探测超时保留原有 AX 兼容路径，并将新协议能力保持未知。普通像素点击只有在消费 schema 已核对、实际 PNG 观察返回 `capture_id` 时才使用一次性绑定，尝试投递后即消耗，失败也不重放。AX token、`from_zoom` 及当前未声明 capture 支持的拖拽维持各自协议，不混用 `capture_id`。插件不安装、升级驱动或代替用户授权。
+
+macOS 可显式设 `desktopIndicator:true` 启用带停止按钮的面板。面板由随包的 Swift/AppKit 源码在本用户私有缓存编译，需要已有 Swift 编译器和 macOS SDK；缺少工具链时返回 `CONTROL_INDICATOR_UNAVAILABLE`，不启动安装器。停止首先锁定会话并取消 Agent，再结束己方驱动；启用面板后若它异常退出或通信失败，也会停止对应控制。它是 DSH 自己的提示，不启动持续录屏或模拟系统共享菜单。
 
 `browserBackend:cua` 保留原有驱动后台浏览器。先用 browser_capabilities 查看实际能力；不能把已注册的工具名当作两个后端全部支持。CUA 0.38 未可靠打通的路径会明确返回不支持。
 
@@ -69,7 +126,7 @@ config:
 | browser_click / type / scroll | 最新 ref 操作，replace 输入及空串清空 |
 | browser_select | 按 label/value 选择原生下拉选项 |
 | browser_pointer / key | hover、右键、双击、拖拽与网页按键 |
-| browser_tabs / history | 列出、新建、选择、关闭本会话标签页；后退、前进、刷新 |
+| browser_tabs / history | 列出、新建、选择、关闭本会话标签页，或按 ref 显式后台打开链接；后退、前进、刷新 |
 | browser_dialog | inspect 后凭最新 dialog_id 接受或取消网页 JS 弹窗 |
 | browser_screenshot | 当前标签页截图与对应坐标语义 |
 | browser_upload / download | 指定普通文件上传、下载保存为新文件 |
@@ -89,7 +146,7 @@ config:
 
 ## 验收入口
 
-`npm test`、`npm run check` 检查组件；`npm run verify:desktop` 操作本机 Calculator；`BROWSER_BACKEND=playwright npm run verify:browser` 验证完整浏览器，省略变量可验证 CUA 兼容模式。模型自主任务验收与脚本指定 ref 的验收分别记录。
+`npm test` 检查组件；`npm run check` 依次执行语法、全库 ESLint 和本轮范围的 Prettier 检查。`npm run lint`、`npm run format:check` 可分别运行，`npm run format` 只格式化 `tools/style-check.mjs` 明确列出的模块及测试。`npm run verify:desktop` 操作本机 Calculator；`BROWSER_BACKEND=playwright npm run verify:browser` 验证完整浏览器，省略变量可验证 CUA 兼容模式。模型自主任务验收与脚本指定 ref 的验收分别记录。
 
 `npm run verify:host` 启动安装版 DSH 的独立 headless 实例，原生加载本轮源码、标准技能和真实文件/审批/沙箱服务；不使用 shell 工具桥。需要显式指定以下环境变量：
 

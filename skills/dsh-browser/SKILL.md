@@ -1,6 +1,6 @@
 ---
 name: dsh-browser
-description: "用 DSH 独立浏览器完成网页阅读、表单、导航及结果核对，优先使用 DOM/语义 ref。适用于实际网页交互；本机原生应用和浏览器外的系统窗口使用 dsh-desktop。"
+description: "用 DSH 浏览器完成网页阅读、表单、导航及结果核对；可在当前 Chrome 的可见专属分组或独立浏览器中操作，优先 DOM/语义 ref。本机原生应用和系统窗口使用 dsh-desktop。"
 ---
 
 # DSH 浏览器操作
@@ -9,7 +9,9 @@ description: "用 DSH 独立浏览器完成网页阅读、表单、导航及结�
 
 ## 建立会话与选择目标
 
-`browser_open` 创建或复用本会话的独立临时 Chromium。默认 Playwright 后端使用 headless Chrome；显式配置的 Cua 后端具有不同能力。两者都不继承用户现有 Chrome 的登录状态；用户要求操作已有登录页时，先说明这个边界并使用已经授权、实际可用的目标浏览器通路，不自动接管用户 profile。
+`browser_open` 按宿主配置建立本会话的浏览器目标。`chrome-extension` 在当前已登录 Chrome 的可见专属标签分组中操作，需要用户已安装并连接 DSH 扩展；只控制本次登记的标签，不接管用户其它页面。默认 Playwright 与 Cua 后端使用独立临时浏览器，不继承当前 Chrome 登录态。用户指定当前 Chrome 时，不擅自切换到独立浏览器，接入未完成就明确报告安装/连接步骤。
+
+当前 Chrome 模式默认后台建立标签并操作，不抢前台、不强制切换用户标签；不要为展示过程而使用桌面工具激活 Chrome。扩展图标显示活动状态并提供停止按钮；用户移出分组或停止后不能用旧 ref 继续，也不能切换桌面工具绕过。`browser_close` 或任务结束释放控制，保留页面并取消本次己方标签的分组，空分组随之消失。用户自行加入或移出的标签不受改动。任务结束会清空 refs；后续回合需要重新 `browser_open`。该模式的自动上传/下载当前均不支持；按 capabilities 处理，文件步骤交用户在可见页面完成。
 
 `browser_observe` 返回当前网页文字和可操作 refs。优先读取结构化 `data`；兼容旧输出时可解析 `result` 中的 JSON。用实际角色、名称和动作选唯一目标；多个同名目标应进一步观察，不能任取一个。
 
@@ -17,17 +19,21 @@ description: "用 DSH 独立浏览器完成网页阅读、表单、导航及结�
 
 - ref 属于单次观察；导航、点击、输入、滚动后重新观察。不能从历史示例复制 ref，也不能把网页 ref 传给桌面 `element`。
 - `browser_type` 的 `replace:true` 替换字段，空字符串可清空。普通命名控件使用后台工具；高风险或语义不明控件按宿主的本次审批处理。
+- 普通替换与下拉选择会只写一次并有界读回。`data.effect:verified` 只证明当前控件值匹配，不证明业务保存；`delivered` 或 `unverifiable` 需要重新观察。读回不匹配时可能已经修改控件，不能自动重复输入或切换其它输入路径。`dialogPending:true` 时先处理弹窗。
 - 优先 DOM/语义操作。遇到 Canvas、自绘控件或图片信息时用 `browser_screenshot`，截图后可 `browser_click({x,y})`；坐标取自当前返回的图片，不自行缩放、不混入桌面坐标或 `from_zoom`。未知坐标目标需要本次审批，审批过期后重新截图。默认 headless 页面没有可交给原生桌面工具的可见窗口。
 - 检查 `truncated`、`complete` 及单字段的 `nameTruncated`/`valueTruncated`。`browser_observe({query})` 收紧文字匹配，`{scope_ref}` 读取当前控件子树；继续阅读时原样使用本次返回的 `continuation`，不同时更换 query/scope。动作、切页或新观察后旧 token 不再使用。没有续页或完整性证据时，明确报告已读范围。
+- 检查 `safetyComplete` 与 `observationBudget`。输出遍历和全页安全扫描各有节点预算，所有 frame 共用总时限；超限不表示页面已读完。`inputBlocked:true` 时不自动输入，也不通过缩小 scope/query 或拼接多次续页绕过全页安全检查。超时、取消或导航后旧 continuation 不再使用。
 - 原生下拉框用 `browser_select({ref,label})` 或 `{ref,value}`，二选一。悬停、右键、双击、同 frame 拖拽用 `browser_pointer` 的 `hover/right_click/double_click/drag`；拖拽另传 `destination_ref`。Playwright 的 `browser_key({ref,key})` 可向当前控件发送 `Enter` 等按键；不要用按键通路绕过敏感输入保护。
 
 ## 标签页与弹窗
 
-先 `browser_tabs({action:"list"})` 获取本会话实际 `tabId`，再用 `action:"select",tab_id` 精确选择。Playwright 还支持 `new/close` 和 `browser_history({action:"back"|"forward"|"reload"})`。弹出新标签页后重新列举，不能假定它已成为当前目标；切换后重新观察取 ref。
+先 `browser_tabs({action:"list"})` 获取本会话实际 `tabId`，再用 `action:"select",tab_id` 精确选择。Playwright 还支持 `new/close/open_link` 和 `browser_history({action:"back"|"forward"|"reload"})`。
+
+当前 Chrome 的新窗口链接使用 `browser_tabs({action:"open_link",ref})`：它读取当前已核验链接的 HTTP(S) href，登记己方后台新页后导航，并直接返回新页观察。此动作仅打开 URL，不执行链接点击脚本。`browser_click` 返回 `BROWSER_BACKGROUND_LINK_REQUIRES_OPEN` 时按此提示处理，不改坐标重试或猜测 URL。依赖点击脚本的流程不能冒称已经执行。普通同页控件继续使用语义 ref 点击。列举后再选择原表单页，切换后重新观察取 ref。
 
 页面 JavaScript 弹窗使用 `browser_dialog({action:"inspect"})`，再把返回的 `dialogId` 传给 `dialog_id` 接受或关闭；prompt 如需输入可传 `prompt_text`。返回 `dialogPending:true` 时先处理弹窗再继续其他操作；接受弹窗走宿主审批。点击超时也可能是弹窗已经出现，应先 inspect，不重放点击。
 
-Cua 后端只支持列举/选择标签页；历史导航、新建/关闭单个标签页、网页按键、dialog、上传和下载目前会明确拒绝。按 `browser_capabilities` 的结果选择可用后端，不把 Playwright 的能力假定到 Cua。完成后 `browser_close` 只关闭本会话拥有的独立浏览器资源。
+Cua 后端只支持列举/选择标签页；历史导航、新建/关闭单个标签页、网页按键、dialog、上传和下载目前会明确拒绝。按 `browser_capabilities` 的结果选择可用后端，不把不同通路的能力混用。完成后 `browser_close` 关闭己方独立资源或释放己方分组控制。
 
 ## 条件等待与动态编排
 

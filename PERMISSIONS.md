@@ -12,6 +12,9 @@
   - 独立临时 Chromium：`browser_open` / `browser_observe` / `browser_navigate` / `browser_click` / `browser_type` / `browser_scroll`；读取网页 DOM/语义状态，以最新 ref 后台操作
   - 批量执行：`run_steps` 每一步都通过宿主 `tools.execute` 权限流程和插件护栏；失败即停
 - 默认网页后端使用 `playwright-core` 启动本机 Chrome 独立临时上下文；不下载浏览器、不连接现有用户 profile。支持本会话标签页/导航/表单/指针/页面弹窗/截图；headless 默认开启。
+- 显式 `browserBackend:chrome-extension` 经用户安装的 DSH Chrome Control 扩展与 Native Messaging 连接当前登录 Chrome。扩展使用 debugger/tabs/tabGroups/nativeMessaging/storage，只有本次新建且仍在登记分组/窗口内的标签可操作；不自动接管已有标签。浏览器会显示控制提示，扩展图标显示活动状态与停止入口。私有 Unix socket 限本用户，Playwright 仅连接每会话受限的本机端点；不开放用户 Chrome 的全局调试端口。
+- Chrome 扩展模式不导出 Cookie、授权请求头或 profile 数据，不提供自动上传/下载；网页沿用当前 Chrome 的网络、权限及原生下载行为，不能把此模式宣传为独立文件沙箱。插件后台新建标签，不主动激活页面或聚焦窗口；关闭及任务结束只释放本次控制、清除活动标记，保留页面并取消仍在本次组/窗口内的己方标签分组，不关闭整个浏览器或默认上下文，也不移动用户自行加入或移出的标签。用户停止、移出分组或连接丢失后撤销控制。
+- DSH 桌面状态面板默认关闭；macOS 显式启用时由本包 Swift/AppKit 源码在用户私有缓存编译，固定 argv、无 shell、无远程代码下载。面板不持续录屏、不模拟系统共享图标；停止按钮先锁定会话、取消 Agent，再结束己方驱动。面板异常退出时停止对应控制。该功能需要本机已有 Swift/SDK。任务结束、取消、异常和卸载均清理己方驱动光标及会话，不触及其它会话。
 - `computer_verify` / `computer_wait_for` / `browser_verify` / `browser_wait_for` 只读检查声明式条件；unknown 不通过。包内技能注册到宿主，`computer_skill` 只返回指导正文。
 - `cua-driver` 可执行文件来源：环境变量 `CUA_DRIVER_BIN` 显式指定，或 `PATH` 查找；缺失时返回结构化错误（含自救指引），不静默。
 - 内置安全护栏（所有工具统一走 `guard()` 包装）：**危险词审批**（敏感目标操作先请求用户确认）、**密码框保护**（检测到密码输入目标时拒绝）、**过期状态拒绝**（观测快照过期后拒绝执行）、**作用域权限**（仅授权应用/窗口内操作）。
@@ -31,7 +34,7 @@
 
 这两个包只声明为 `peerDependencies`，由 DSH 宿主提供并解析；插件不会把它们作为独立 runtime 副本打包进 profile。开发测试所需版本仅放在 `devDependencies` 中。
 
-额外运行依赖 `playwright-core` 提供受支持的独立浏览器后端，不带浏览器下载 lifecycle。`dsh-skill` 只作为开发依赖验证原生技能注册契约；运行时按宿主实际提供的 skills/systemPrompt 服务注册与降级。
+额外运行依赖 `playwright-core` 提供浏览器 DOM/ref 控制，`ws` 提供仅绑定 loopback 的会话桥接；两者不下载浏览器，没有 npm lifecycle 脚本。`dsh-skill` 只作为开发依赖验证原生技能注册契约；运行时按宿主实际提供的 skills/systemPrompt 服务注册与降级。
 
 | 宿主依赖 | 用途 |
 |---|---|

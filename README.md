@@ -39,7 +39,7 @@
 
 `dsh-computer-use` 是 DeepSeek Harness 的跨平台 Computer Use 插件，为 AI Agent 增加一套可观察、可约束、可验证的桌面操作能力。
 
-它不是传统的鼠标宏：Agent 必须先观察目标窗口，再基于新鲜快照执行动作。点击、双击和右键操作通过 cua-driver 的独立虚拟光标完成，用户可以看到操作过程，而不是让程序悄悄发送一串不可见事件。
+Agent 必须先观察目标窗口，再基于新鲜快照执行动作。桌面点击使用 cua-driver 的独立虚拟光标，不移动你的真实鼠标；网页优先通过后台 DOM 操作完成，减少对前台工作的打断。
 
 适合用于：
 
@@ -83,7 +83,7 @@ flowchart LR
 |---|---|
 | 屏幕观察 | 读取目标窗口元数据、Accessibility/AX/UIA 元素和坐标 |
 | 三种观察模式 | `ax` 零视觉 Token、`native` 主模型直读图片、`vision` 视觉观察者 |
-| 独立虚拟光标 | 点击、双击、右键会显示虚拟光标移动和操作过程，不抢用户真实鼠标 |
+| 独立虚拟光标 | 桌面动作使用独立光标，不抢用户真实鼠标；空闲隐藏，任务结束清理 |
 | 文本与快捷键 | 输入文本、发送 `return`、`cmd+c`、`ctrl+shift+p` 等按键 |
 | 滚动与拖拽 | 支持上下左右滚动和窗口本地截图坐标拖拽 |
 | 应用管理 | 列出运行中的应用，后台启动应用，按需前置窗口 |
@@ -93,6 +93,14 @@ flowchart LR
 ## 36 个模型工具
 
 完整用法见 [技能、条件与浏览器指南](docs/usage.md)。包内两份 skill 会注册到 DSH；默认浏览器使用独立 headless Playwright Chrome，原生桌面仍用 cua-driver。现有 CUA 浏览器模式可显式配置保留。
+
+开源机制的来源、固定版本、许可证和本轮落地范围见 [开源调研与复用记录](docs/open-source-reuse.md)。
+
+需要复用当前 Chrome 登录态并可自行查看操作时，选择 `browserBackend: chrome-extension`，安装配套 **DSH Chrome Control** 扩展。它在当前 Chrome 的紫色专属分组中后台操作，不主动激活标签或前置窗口；工具栏图标提供状态和停止入口，只控制本次新建并登记的标签。`browser_close` 或任务结束释放控制、清除活动标记，保留页面并取消本次标签的分组，空分组自动消失。自动上传/下载在此模式暂不支持，详情见[安装和权限说明](docs/usage.md#在当前-chrome-的可见分组中操作)。
+
+`desktopIndicator` 默认关闭，不显示常驻 DSH 浮层。虚拟光标空闲约一秒隐藏，任务完成、取消或异常时清理本会话光标与驱动。macOS 可显式启用带停止按钮的面板，需要本机已有 Swift/SDK；面板不持续录屏或模拟系统共享菜单。
+
+当前 Chrome 的新窗口链接使用 `browser_tabs({action:"open_link",ref})`，按已核验的 HTTP(S) href 建立己方后台页，不执行链接点击脚本；普通同页控件仍使用 `browser_click`。这避免后台 Cmd/Meta 点击的新页被错误关联到用户当前活动标签。
 
 | 工具 | 作用 | 主要参数 |
 |---|---|---|
@@ -361,6 +369,13 @@ computer_click(x=640, y=420)
 | `allowedApps` | `[]` | 空数组表示不限制；非空时只允许列表中的应用 |
 | `cursorTheme` | `com.dsh.computeruse.rainbow` | 虚拟光标主题；空字符串使用引擎默认主题 |
 | `nativeImage` | `auto` | `auto` 自动降级；`full` 原图；`compact` 始终使用小图 |
+| `browserBackend` | `playwright` | `chrome-extension` 控制当前 Chrome 专属分组；`playwright` 独立浏览器；`cua` 兼容驱动 |
+| `browserHeadless` | `true` | 只影响独立 Playwright；false 显示独立窗口 |
+| `browserObservationMaxNodes` | `10000` | 浏览器输出遍历节点预算，100–100000；与 maxElements 分开 |
+| `browserObservationSafetyMaxNodes` | `10000` | 全页安全扫描节点预算，100–100000；query/scope/续页不绕过 |
+| `browserObservationTimeoutMs` | `5000` | 跨 frame 观察总时限，100–30000ms；超限返回不完整状态 |
+| `desktopIndicator` | `false` | 可显式启用 macOS DSH 状态面板与停止按钮，需要本机 Swift/SDK |
+| `chromeBridgeSocketPath` | 自动 | Chrome 配套桥接私有 socket；默认位于 DSH_HOME/computer-use |
 | `visionProvider` | `deepseek-official` | `vision` 模式使用的 provider |
 | `visionModel` | `deepseek-v4-flash-vision-exp` | `vision` 模式使用的视觉模型 |
 
@@ -402,6 +417,8 @@ npm run check
 # 运行时验证需要已安装 harness-desktop 和 cua-driver
 node verify-runtime.mjs
 ```
+
+`npm run check` 包含语法、全库 ESLint 和范围内的 Prettier 检查。`npm run format` 只整理 `tools/style-check.mjs` 指定的核心模块和测试；规范和上游取舍见 [开源复用记录](docs/open-source-reuse.md#代码风格与检查)。
 
 macOS headless 验证示例：
 
@@ -454,6 +471,8 @@ It can inspect desktop windows, expose actionable AX/UIA elements, use a screens
 ## Current improvements
 
 Thirty-six tools include bundled desktop/browser skills, declarative waits and assertions, and dynamic batches with references, branches and bounded loops. The default browser backend launches an isolated headless Chrome through playwright-core; CUA remains an explicit compatibility backend. Tabs, history, forms, dialogs, screenshots and host-authorized file transfers are available according to browser_capabilities. See the [usage guide](docs/usage.md) for contracts and boundaries. New installs default to a 120-second snapshot TTL; existing explicit settings remain. Reload the host to load updated source.
+
+The opt-in `chrome-extension` backend uses DSH Chrome Control to work in an owned purple tab group in the user's logged-in Chrome. It creates background tabs without activating the tab or focusing Chrome. Task completion releases control, clears the activity badge, and ungroups its own tabs while preserving their pages. Empty groups disappear automatically; tabs the user added or moved elsewhere are left alone. Automatic file transfers are currently unsupported. The desktop status panel is off by default. Desktop cursors hide after a short idle and are cleared when the task finishes or is cancelled. macOS users may explicitly enable the optional panel and Stop button; it does not imitate the system's sharing indicator or start continuous recording.
 
 ## Highlights
 
@@ -613,6 +632,13 @@ If the driver reports `background_unavailable`, the plugin asks for one-time app
 | `allowedApps` | `[]` | Empty means unrestricted; otherwise only listed apps are allowed |
 | `cursorTheme` | `com.dsh.computeruse.rainbow` | Virtual cursor theme; empty uses the engine default |
 | `nativeImage` | `auto` | `auto`, `full`, or `compact` screenshot strategy |
+| `browserBackend` | `playwright` | `chrome-extension` for an owned group in existing Chrome; `playwright` for an isolated browser; `cua` for compatibility |
+| `browserHeadless` | `true` | Standalone Playwright only; false makes the target tab visible |
+| `browserObservationMaxNodes` | `10000` | Output traversal budget, 100–100000 nodes across frames |
+| `browserObservationSafetyMaxNodes` | `10000` | Independent whole-page safety budget, including queries/scoped reads |
+| `browserObservationTimeoutMs` | `5000` | Shared observation deadline, 100–30000ms; exhaustion remains incomplete |
+| `desktopIndicator` | `false` | Optional macOS DSH status and Stop panel; requires installed Swift/SDK |
+| `chromeBridgeSocketPath` | automatic | Private companion socket under DSH_HOME/computer-use |
 | `visionProvider` | `deepseek-official` | Provider used by `vision` mode |
 | `visionModel` | `deepseek-v4-flash-vision-exp` | Image-capable observer model |
 
@@ -652,6 +678,8 @@ npm run check
 npm test
 node verify-runtime.mjs
 ```
+
+`npm run check` runs syntax validation, repository-wide ESLint, and scoped Prettier checks. `npm run format` formats only the core modules and tests listed in `tools/style-check.mjs`.
 
 The runtime verification requires a working `harness-desktop` installation and `cua-driver`. Additional evidence is available in:
 
