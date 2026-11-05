@@ -166,3 +166,165 @@ test('invalid explicit zoom dimensions cannot restore the old zoom mapping', asy
   assert.equal(getSnapshot().zoom, null)
   assert.equal(getSnapshot().entries, old.entries)
 })
+
+const consentError = {
+  code: 'px_capture_unavailable',
+  reason: 'direct_capture_consent_required: private-window-marker; do-not-copy-bypass-advice',
+  suggestion: 'private-suggestion-marker',
+}
+
+function assertConsentDiagnostic(value) {
+  assert.equal(value.ok, false)
+  assert.deepEqual(Object.keys(value).sort(), ['ok', 'result'])
+  assert.match(value.result, /px_capture_unavailable\/direct_capture_consent_required/)
+  assert.match(value.result, /不能静默授权/)
+  assert.match(value.result, /cua-driver permissions grant/)
+  assert.match(value.result, /不要立即重试/)
+  assert.match(value.result, /mode="ax"/)
+  assert.equal(value.result.includes('private-window-marker'), false)
+  assert.equal(value.result.includes('private-suggestion-marker'), false)
+  assert.equal(value.result.includes('do-not-copy-bypass-advice'), false)
+  assert.equal(value.result.includes('Coordinate fixture'), false)
+}
+
+for (const mode of ['native', 'vision']) {
+  test(`${mode} empty capture explains direct consent without saving or invoking a model`, async () => {
+    const h = harness({
+      observer: true,
+      state: { ...driverState, screenshot_png_b64: '', screenshot_error: consentError },
+    })
+    const value = await screenObserve(h.ctx, { mode }, cfg, {}, h.deps)
+    assertConsentDiagnostic(value)
+    assert.equal(h.saved(), 0)
+    assert.equal(h.described(), 0)
+    assert.equal(getSnapshot(), null)
+    assert.deepEqual(h.calls, ['list_windows', 'get_window_state'])
+  })
+
+  test(`${mode} compact zoom uses the same consent diagnostic without falling through to another model`, async () => {
+    const h = harness({
+      observer: true,
+      zoom: { width: 500, height: 300, screenshot_png_b64: '', screenshot_error: consentError },
+    })
+    const value = await screenObserve(
+      h.ctx,
+      { mode },
+      { ...cfg, nativeImage: 'compact' },
+      {},
+      h.deps,
+    )
+    assertConsentDiagnostic(value)
+    assert.equal(h.saved(), 0)
+    assert.equal(h.described(), 0)
+    assert.equal(getSnapshot(), null)
+    assert.deepEqual(h.calls, ['list_windows', 'get_window_state', 'zoom'])
+  })
+}
+
+test('usable degraded AX keeps tokens but publishes no pixel frame and does not recapture', async () => {
+  const h = harness({
+    observer: true,
+    state: {
+      ...driverState,
+      screenshot_png_b64: '',
+      screenshot_error: consentError,
+      screenshot_frame_valid: true,
+      capture_id: 'must-not-bind-an-unavailable-image',
+      degraded_reason: 'ax_window_unresolved',
+      elements: [
+        {
+          ...driverState.elements[0],
+          screenshot_frame: { x: 10, y: 20, w: 50, h: 40 },
+        },
+      ],
+    },
+  })
+  const value = await screenObserve(h.ctx, {}, cfg, {}, h.deps)
+  assert.equal(value.ok, true)
+  assert.equal(value.mode, 'ax')
+  assert.match(value.result, /截图\/像素坐标不可用/)
+  assert.match(value.result, /direct_capture_consent_required/)
+  assert.equal(value.result.includes('@('), false)
+  assert.equal(value.result.includes('private-window-marker'), false)
+  assert.equal(value.result.includes('private-suggestion-marker'), false)
+  assert.equal(value.image, undefined)
+  assert.deepEqual([value.elements[0].x, value.elements[0].y], [null, null])
+  const snapshot = getSnapshot()
+  assert.equal(snapshot.entries.get(1).token, 'button-1')
+  assert.deepEqual([snapshot.entries.get(1).x, snapshot.entries.get(1).y], [null, null])
+  assert.equal(snapshot.screenshotWidth, null)
+  assert.equal(snapshot.screenshotHeight, null)
+  assert.equal(snapshot.zoom, null)
+  assert.equal(h.saved(), 0)
+  assert.equal(h.described(), 0)
+  assert.deepEqual(h.calls, ['list_windows', 'get_window_state'])
+})
+
+test('an empty degraded AX tree with an explicit capture failure is not captured a second time', async () => {
+  const h = harness({
+    observer: true,
+    state: { ...driverState, screenshot_png_b64: '', screenshot_error: consentError, elements: [] },
+  })
+  const value = await screenObserve(h.ctx, {}, cfg, {}, h.deps)
+  assertConsentDiagnostic(value)
+  assert.deepEqual(h.calls, ['list_windows', 'get_window_state'])
+  assert.equal(h.saved(), 0)
+  assert.equal(h.described(), 0)
+  assert.equal(getSnapshot(), null)
+})
+
+test('explicit empty zoom preserves AX tokens while clearing its old pixel mapping', async () => {
+  const h = harness({
+    zoom: { width: 500, height: 300, screenshot_png_b64: '', screenshot_error: consentError },
+  })
+  await screenObserve(h.ctx, {}, cfg, {}, h.deps)
+  const old = getSnapshot()
+  setSnapshot({ ...old, zoom: { width: 500, height: 300 } })
+  const value = await screenZoom(h.ctx, {}, cfg, {}, h.deps)
+  assertConsentDiagnostic(value)
+  assert.equal(getSnapshot().zoom, null)
+  assert.equal(getSnapshot().entries, old.entries)
+  assert.equal(getSnapshot().at, old.at)
+  assert.equal(h.saved(), 0)
+  assert.equal(h.described(), 0)
+})
+
+test('other and malformed screenshot errors never echo reason, suggestion or arbitrary codes', async () => {
+  for (const detail of [
+    { ...consentError, code: 'px_frame_mismatch' },
+    { ...consentError, reason: 'not-a-known-consent-code: private-window-marker' },
+    { ...consentError, code: 'private-window-marker'.repeat(20) },
+    'private-window-marker',
+  ]) {
+    const h = harness({
+      state: { ...driverState, screenshot_png_b64: '', screenshot_error: detail },
+    })
+    const value = await screenObserve(h.ctx, { mode: 'native' }, cfg, {}, h.deps)
+    assert.equal(value.ok, false)
+    assert.match(value.result, /截图当前不可用/)
+    assert.equal(value.result.includes('cua-driver permissions grant'), false)
+    assert.equal(value.result.includes('private-window-marker'), false)
+    assert.equal(value.result.includes('private-suggestion-marker'), false)
+    assert.equal(value.result.includes('do-not-copy-bypass-advice'), false)
+    assert.equal(value.result.includes('Coordinate fixture'), false)
+    assert.equal(h.saved(), 0)
+    assert.equal(h.described(), 0)
+  }
+})
+
+test('drivers omitting screenshot_error retain their existing empty-image diagnostics', async () => {
+  const empty = { ...driverState, screenshot_png_b64: '' }
+  for (const mode of ['native', 'vision']) {
+    const h = harness({ state: empty, observer: true })
+    const value = await screenObserve(h.ctx, { mode }, cfg, {}, h.deps)
+    assert.equal(value.ok, false)
+    assert.match(value.result, /引擎返回空截图/)
+    assert.equal(value.result.includes('permissions grant'), false)
+    assert.equal(h.saved(), 0)
+    assert.equal(h.described(), 0)
+  }
+  const h = harness({ zoom: { screenshot_png_b64: '' } })
+  await screenObserve(h.ctx, {}, cfg, {}, h.deps)
+  const value = await screenZoom(h.ctx, {}, cfg, {}, h.deps)
+  assert.deepEqual(value, { ok: false, result: 'zoom 返回空图片。' })
+})
