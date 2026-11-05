@@ -189,6 +189,7 @@ for (const options of [{ browser: null }, { cfg: { allowedApps: ['Other'] } }]) 
     const f = fixture(options)
     const value = await f.controller.browserVerify({ expect: browserExpect }, {})
     assert.equal(value.status, 'error')
+    assert.equal(value.data.code, options.browser === null ? 'NO_BROWSER' : 'APP_NOT_ALLOWED')
     assert.equal(f.reads(), 0)
   })
 }
@@ -208,6 +209,25 @@ test('owned Playwright browser conditions do not require or fabricate an OS pid'
   assert.equal(value.ok, true)
   assert.equal(f.state.browser.pid, undefined)
   assert.equal(f.reads(), 1)
+})
+
+test('visible Chrome companion conditions use their owned observation without an OS pid', async () => {
+  const f = fixture({ browser: { backend:'chrome-extension', pid:undefined } })
+  const value = await f.controller.browserVerify({expect:browserExpect},{})
+  assert.equal(value.ok,true)
+  assert.equal(f.reads(),1)
+})
+
+test('stopping Chrome while reading cannot return a satisfied browser condition', async () => {
+  let f
+  f=fixture({browser:{backend:'chrome-extension',pid:undefined},browserRead:async()=>{
+    f.state.controlStopped=true
+    return {ok:true,observation:{},facts:{text:'Ready',textComplete:true,complete:true,refs:[]}}
+  }})
+  const value=await f.controller.browserVerify({expect:browserExpect},{})
+  assert.equal(value.ok,false)
+  assert.equal(value.status,'error')
+  assert.match(value.result,/停止/)
 })
 
 test('browser wait returns only the final refs after multiple refreshed reads', async () => {

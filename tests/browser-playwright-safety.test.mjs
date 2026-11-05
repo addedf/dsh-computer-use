@@ -58,13 +58,14 @@ test('a failed frame inspection blocks typing into otherwise readable fields', a
       value: '', rect: { x: 0, y: 0, width: 100, height: 20 }, inViewport: true }),
     fill: async () => { fills++ }, dispose: async () => {},
   }
-  const root = {
-    evaluate: async (fn, arg) => arg !== undefined || String(fn).includes("matches('button")
-      ? false : { text: 'Name input', password: false },
-    $$: async () => [input], dispose: async () => {},
-  }
-  const readable = { locator: () => ({ elementHandle: async () => root }) }
-  const inaccessible = { locator: () => ({ elementHandle: async () => { throw new Error('frame inspection unavailable') } }) }
+  input.asElement = () => input
+  const metadata = { cursorValid: true, rows: [await input.evaluate()], text: 'Name input', used: { output: 1, safety: 1 }, outputComplete: true, safetyComplete: true, sensitive: false, stopReasons: [] }
+  const readable = { evaluateHandle: async () => ({
+    evaluate: async () => metadata,
+    getProperty: async () => ({ getProperties: async () => new Map([['0', input]]), dispose: async () => {} }),
+    dispose: async () => {},
+  }) }
+  const inaccessible = { evaluateHandle: async () => { throw new Error('frame inspection unavailable') } }
   page.frames = () => [readable, inaccessible]
 
   const observed = await controller.observe({}, exec)
