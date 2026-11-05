@@ -20,11 +20,14 @@ function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{reso
 const read=deferred(),messages=[],badges=[],nativeCalls=[],readRegistrations=[],ports=[]
 const tabs=new Map([[10,{id:10,windowId:7,groupId:-1,active:true}]]);let nextTab=20
 let writesFail=false
+const saved={},alarmNames=new Set()
+const lifecycle=['remembered','not-trusted','new-install','update-revoked','bridge-reconnect','revoke-restart','grant-write-failure','invalid-permission'].includes(scenario)
 function createPort(){const port={onMessage:event(),onDisconnect:event(),sent:[],postMessage:(message)=>{port.sent.push(message);messages.push(message)},disconnect(){port.disconnected=true;port.onDisconnect.emit()}};ports.push(port);return port}
 const port=createPort()
 const api={
-  runtime:{id:'fixture-extension',onMessage:event(),getURL:(path)=>'chrome-extension://fixture-extension/'+path,connectNative:(name)=>{nativeCalls.push(name);return nativeCalls.length===1?port:createPort()}},
-  storage:{local:{get:()=>{readRegistrations.push(api.runtime.onMessage.listeners.size);return read.promise},set:async()=>{if(writesFail)throw new Error('Storage write failed')}}},
+  runtime:{id:'fixture-extension',onMessage:event(),onStartup:event(),onInstalled:event(),getURL:(path)=>'chrome-extension://fixture-extension/'+path,connectNative:(name)=>{nativeCalls.push(name);const created=nativeCalls.length===1?port:createPort();if(scenario!=='bridge-reconnect')queueMicrotask(()=>created.onMessage.emit({type:'bridge-ready',protocol:1}));return created}},
+  storage:{local:{get:()=>{readRegistrations.push(api.runtime.onMessage.listeners.size);return read.promise},set:async(value)=>{if(writesFail)throw new Error('Storage write failed');Object.assign(saved,value)}}},
+  alarms:{onAlarm:event(),create:async(name)=>{alarmNames.add(name)},clear:async(name)=>alarmNames.delete(name)},
   action:{setBadgeText:async(value)=>{badges.push(value.text)},setBadgeBackgroundColor:async()=>{},setTitle:async()=>{}},
   debugger:{onEvent:event(),onDetach:event(),attach:async()=>{},detach:async()=>{},sendCommand:async({tabId},method)=>method==='Target.getTargetInfo'?{targetInfo:{targetId:'target-'+tabId}}:{}},
   tabs:{onUpdated:event(),onCreated:event(),onRemoved:event(),onDetached:event(),create:async(args)=>{const tab={id:nextTab++,windowId:7,groupId:-1,...args};tabs.set(tab.id,tab);return {...tab}},get:async(id)=>({...tabs.get(id)}),group:async({tabIds})=>{for(const id of tabIds)tabs.get(id).groupId=50;return 50},ungroup:async(id)=>{tabs.get(id).groupId=-1;api.tabs.onUpdated.emit(id,{groupId:-1},{...tabs.get(id)})}},
@@ -44,6 +47,7 @@ if(typeof entry.hasTopLevelAwait==='function')assert.equal(entry.hasTopLevelAwai
 if(typeof entry.hasAsyncGraph==='function')assert.equal(entry.hasAsyncGraph(),false)
 const evaluated=entry.evaluate()
 assert.equal(api.runtime.onMessage.listeners.size,1,'Runtime listener must register during synchronous evaluation')
+assert.equal(api.runtime.onStartup.listeners.size,1);assert.equal(api.runtime.onInstalled.listeners.size,1);assert.equal(api.alarms.onAlarm.listeners.size,1)
 await evaluated
 assert.deepEqual(readRegistrations,[1],'Storage starts only after listener registration')
 assert.equal(api.debugger.onEvent.listeners.size,0,'Broker is not opened while stopped-owner storage is pending')
@@ -62,6 +66,59 @@ async function pendingEvaluation(owner,id){
   port.onMessage.emit(request);await entered.promise
   assert.equal(messages.some((item)=>item.id===request.id),false)
   return {request,result}
+}
+if(lifecycle){
+  async function flush(){for(let n=0;n<8;n++)await new Promise(setImmediate)}
+  if(scenario==='remembered'){
+    read.resolve({blockedOwners:['old-stop'],autoConnect:true});await flush()
+    let state=await dispatch({action:'status'}).promise
+    assert.equal(nativeCalls.length,1);assert.equal(state.connected,true);assert.equal(state.autoConnect,true)
+    api.runtime.onStartup.emit();api.runtime.onInstalled.emit({reason:'update'});await flush()
+    assert.equal(nativeCalls.length,1,'Startup and update do not duplicate an existing native port')
+    assert.equal((await native({id:200,method:'session.open',params:{owner:'old-stop'}})).error.code,'CHROME_CONTROL_STOPPED')
+  }else if(scenario==='not-trusted'){
+    read.resolve({blockedOwners:[]});await flush();api.runtime.onStartup.emit();api.alarms.onAlarm.emit({name:'dsh-native-reconnect'});await flush()
+    assert.equal(nativeCalls.length,0);assert.equal((await dispatch({action:'status'}).promise).autoConnect,false)
+  }else if(scenario==='new-install'){
+    api.runtime.onInstalled.emit({reason:'install'});read.resolve({blockedOwners:[]});await flush()
+    assert.equal(saved.autoConnect,true);assert.equal(nativeCalls.length,1);assert.equal((await dispatch({action:'status'}).promise).connected,true)
+  }else if(scenario==='update-revoked'){
+    read.resolve({blockedOwners:[],autoConnect:false});await flush();api.runtime.onInstalled.emit({reason:'update'});api.runtime.onInstalled.emit({reason:'install'});api.runtime.onStartup.emit();await flush()
+    assert.equal(nativeCalls.length,0);assert.equal((await dispatch({action:'status'}).promise).autoConnect,false)
+  }else if(scenario==='bridge-reconnect'){
+    read.resolve({blockedOwners:[],autoConnect:true});await flush()
+    let state=await dispatch({action:'status'}).promise
+    assert.equal(state.connected,false,'Creating a native port is not evidence that DSH is connected');assert.equal(state.connecting,true)
+    port.onMessage.emit({type:'bridge-ready',protocol:1});await flush()
+    assert.equal((await dispatch({action:'status'}).promise).connected,true)
+    const pending=await pendingEvaluation('disconnected-owner',300)
+    const cleanup=deferred();api.debugger.detach=()=>cleanup.promise
+    port.onMessage.emit({type:'bridge-disconnected',protocol:1});await flush()
+    port.onMessage.emit({type:'bridge-disconnected',protocol:1});await flush()
+    cleanup.resolve();await flush()
+    assert.equal(tabs.get(20).groupId,-1,'Repeated offline notifications must not interrupt the first stopped-session cleanup')
+    state=await dispatch({action:'status'}).promise
+    assert.equal(state.connected,false);assert.equal(state.autoConnect,true);assert.ok(saved.blockedOwners.includes('disconnected-owner'))
+    port.onMessage.emit({type:'bridge-ready',protocol:1});await flush()
+    assert.equal((await native({id:310,method:'session.open',params:{owner:'disconnected-owner'}})).error.code,'CHROME_CONTROL_STOPPED')
+    pending.result.resolve({result:{type:'string',value:'late old DSH reply'}});await flush()
+    assert.equal(port.sent.some((item)=>item.id===pending.request.id),false,'Old bridge replies cannot leak into a new DSH connection')
+    assert.ok((await native({id:311,method:'session.open',params:{owner:'new-owner'}})).result)
+  }else if(scenario==='revoke-restart'){
+    read.resolve({blockedOwners:[],autoConnect:true});await flush();port.disconnect();await flush()
+    assert.ok(alarmNames.has('dsh-native-reconnect'))
+    const state=await dispatch({action:'disconnect'}).promise
+    assert.equal(saved.autoConnect,false);assert.equal(state.autoConnect,false);assert.equal(state.connected,false)
+    assert.equal(alarmNames.size,0);api.runtime.onStartup.emit();api.alarms.onAlarm.emit({name:'dsh-native-reconnect'});await flush();assert.equal(nativeCalls.length,1)
+  }else if(scenario==='grant-write-failure'){
+    read.resolve({blockedOwners:[]});await flush();writesFail=true
+    const state=await dispatch({action:'connect'}).promise
+    assert.equal(state.ok,false);assert.match(state.error,/无法保存本机连接授权/);assert.equal(nativeCalls.length,0)
+  }else if(scenario==='invalid-permission'){
+    read.resolve({blockedOwners:[],autoConnect:'true'});await flush()
+    assert.equal((await dispatch({action:'status'}).promise).ok,false);assert.equal(nativeCalls.length,0)
+  }
+  console.log(JSON.stringify({scenario,passed:true}));process.exit(0)
 }
 const status=dispatch({action:'status'}),connect=dispatch({action:'connect'})
 await new Promise(setImmediate)
@@ -166,6 +223,8 @@ test('disconnected native requests neither starve nor leak replies into a new po
 test('service worker storage-read failure responds with error and keeps native access closed',()=>run('read-failure'))
 test('corrupt stored STOP state cannot silently become an empty allow state',()=>run('invalid'))
 test('losing STOP-state persistence closes an already connected native port',()=>run('write-failure'))
+
+for(const scenario of ['remembered','not-trusted','new-install','update-revoked','bridge-reconnect','revoke-restart','grant-write-failure','invalid-permission'])test('service worker remembered authorization lifecycle: '+scenario,()=>run(scenario))
 
 test('popup request times out instead of waiting indefinitely for a failed worker',async()=>{
   await assert.rejects(requestRuntimeMessage({sendMessage:()=>new Promise(()=>{})},{action:'status'},{timeoutMs:10}),/扩展后台未在.*响应.*刷新/)

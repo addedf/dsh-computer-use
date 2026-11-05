@@ -126,6 +126,7 @@ test('explicit link navigation owns both background pages and releases their gro
   peer = createConnection(bridge.socketPath)
   peer.on('error', () => {})
   peer.on('data', createNativeDecoder((request) => {
+    if (request.type === 'bridge-ready') return
     requests.push(request)
     void evaluate(`broker.handleCommand(${JSON.stringify(request)})`).then((response) => {
       if (request.method === 'session.open' && response.result) response.result.transportConcurrency = 'parallel-rpc'

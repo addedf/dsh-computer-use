@@ -15,31 +15,53 @@ if (!socketPath || !isAbsolute(socketPath) || !/^[a-p]{32}$/.test(extensionId ||
   process.stderr.write('DSH Chrome native host: invalid launch parameters.\n')
   process.exitCode = 1
 } else {
-  const socket = createConnection(socketPath)
-  let ended = false
-  const fail = () => {
-    if (ended) return
-    ended = true
-    process.stderr.write('DSH Chrome native host: local connection ended. Open DSH browser control, then reconnect the extension.\n')
-    process.exitCode = 1
-    socket.destroy(); process.stdin.destroy()
+  let socket, ready = false, ended = false, retryTimer, retryDelay = 1000
+  const send = (message) => {
+    if (ended) return false
+    return process.stdout.write(encodeNativeFrame(message))
   }
-  socket.once('connect', () => {
-    socket.setTimeout(0)
-    socket.write(encodeNativeFrame({ type: 'native-hello', protocol: 1, extensionId, pid: process.pid }))
-  })
-  socket.setTimeout(3000, fail)
-  socket.on('error', fail)
-  socket.on('close', () => { if (!ended) { ended = true; process.stdin.destroy() } })
-  socket.on('drain', () => process.stdin.resume())
-  process.stdout.on('drain', () => socket.resume())
-  process.stdout.on('error', () => { ended = true; socket.destroy(); process.stdin.destroy() })
+  const finish = (failed = false) => {
+    if (ended) return
+    ended = true; clearTimeout(retryTimer)
+    if (failed) { process.exitCode = 1; process.stderr.write('DSH Chrome native host: local transport failed.\n') }
+    socket?.destroy(); process.stdin.destroy()
+  }
+  const disconnected = () => { ready = false; send({ type: 'bridge-disconnected', protocol: 1 }) }
+  const connect = () => {
+    if (ended) return
+    const peer = createConnection(socketPath)
+    socket = peer; ready = false
+    const handshake = setTimeout(() => peer.destroy(), 3000)
+    peer.once('connect', () => {
+      peer.write(encodeNativeFrame({ type: 'native-hello', protocol: 1, extensionId, pid: process.pid }))
+    })
+    peer.on('data', createNativeDecoder((message) => {
+      if (ended || socket !== peer) return
+      if (!ready) {
+        if (message.type !== 'bridge-ready' || message.protocol !== 1) { peer.destroy(); return }
+        clearTimeout(handshake); ready = true; retryDelay = 1000
+      }
+      if (!send(message)) peer.pause()
+    }, () => finish(true)))
+    peer.on('error', () => {})
+    peer.on('drain', () => { if (socket === peer) process.stdin.resume() })
+    peer.on('close', () => {
+      clearTimeout(handshake)
+      if (ended || socket !== peer) return
+      socket = undefined; process.stdin.resume(); disconnected()
+      retryTimer = setTimeout(connect, retryDelay)
+      retryDelay = Math.min(5000, retryDelay * 2)
+    })
+  }
+  process.stdout.on('drain', () => socket?.resume())
+  process.stdout.on('error', () => finish())
+  // An unavailable DSH never queues or replays commands into a later process.
   process.stdin.on('data', createNativeDecoder((message) => {
+    if (ended || !ready || !socket || socket.destroyed) return
     if (!socket.write(encodeNativeFrame(message))) process.stdin.pause()
-  }, fail))
-  socket.on('data', createNativeDecoder((message) => {
-    if (!process.stdout.write(encodeNativeFrame(message))) socket.pause()
-  }, fail))
-  process.stdin.on('end', () => { ended = true; socket.end() })
-  process.stdin.on('error', fail)
+  }, () => finish(true)))
+  process.stdin.on('end', () => finish())
+  process.stdin.on('error', () => finish(true))
+  disconnected()
+  connect()
 }

@@ -36,6 +36,7 @@ async function fixture(t, handler, cfg = {}) {
       peer = createConnection(path)
       peer.on('error', () => {})
       peer.on('data', createNativeDecoder((request) => {
+        if (request.type === 'bridge-ready') return
         requests.push(request)
         Promise.resolve(handler?.(request, peer) ?? (request.method === 'cdp.send'
           ? { id: request.params.message.id, ...(request.params.message.sessionId ? { sessionId: request.params.message.sessionId } : {}), result: { owner: request.params.owner } }
@@ -522,6 +523,7 @@ test('native host carries real stdio frames to the relay and closes cleanly', as
   child = spawn(process.execPath, ['tools/chrome-native-host.mjs', '--socket', bridge.socketPath, '--extension-id', EXTENSION_ID, `chrome-extension://${EXTENSION_ID}/`], { cwd: new URL('../', import.meta.url) })
   const calls = [], decodeErrors = []
   child.stdout.on('data', createNativeDecoder((request) => {
+    if (request.type) return
     calls.push(request)
     const result = request.method === 'cdp.send'
       ? { id: request.params.message.id, result: { transported: true } }

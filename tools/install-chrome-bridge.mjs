@@ -60,7 +60,7 @@ async function main() {
   if (args.includes('--install') && args.includes('--dry-run')) throw new Error('Choose --dry-run or --install.')
   const plan = await chromeBridgeInstallPlan()
   const installed = args.includes('--install') ? await installChromeBridge(plan) : null
-  console.log(JSON.stringify({ mode: installed ? 'installed' : 'dry-run', extensionId: plan.extensionId, extensionDirectory: plan.extensionDirectory, launcher: plan.launcher, nativeManifest: plan.nativeManifest, socketPath: plan.socketPath, ...(installed || {}), next: 'Load chrome-extension in Chrome after reviewing its permissions. Enable the chrome-extension backend in DSH and reload the plugin, click Connect in the extension popup, then start a browser task.' }, null, 2))
+  console.log(JSON.stringify({ mode: installed ? 'installed' : 'dry-run', extensionId: plan.extensionId, extensionDirectory: plan.extensionDirectory, launcher: plan.launcher, nativeManifest: plan.nativeManifest, socketPath: plan.socketPath, ...(installed || {}), next: 'Load chrome-extension in Chrome after reviewing its permissions. New installations automatically connect in the background. Enable the chrome-extension backend in DSH and reload the plugin. When upgrading an older extension, enable automatic connection once in its popup. Later DSH or Chrome restarts reconnect automatically; revoking authorization disables this.' }, null, 2))
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
