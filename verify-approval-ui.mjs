@@ -137,6 +137,7 @@ try {
       // Keep it private for the UI controller; never print or persist it in
       // status, traces, evidence, screenshots, or repository artifacts.
       const source = isError ? stderr : stdout
+      // eslint-disable-next-line no-control-regex -- Exclude ANSI escape delimiters from the private launch URL.
       const matched = /dsh web:\s*(http:\/\/127\.0\.0\.1:\d+[^\s\u001b]*)/.exec(source)?.[1]
       if (matched && !status.webURL) {
         const url = new URL(matched)

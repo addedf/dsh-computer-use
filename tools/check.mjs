@@ -3,9 +3,22 @@ import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
-const files = ['index.js', ...readdirSync(new URL('../lib/', import.meta.url)).filter((f) => f.endsWith('.js')).map((f) => `lib/${f}`), ...readdirSync(new URL('../tools/', import.meta.url)).filter((f) => f.endsWith('.mjs')).map((f) => `tools/${f}`), ...readdirSync(root).filter((f) => /^verify-.*\.mjs$/.test(f))]
+const files = [
+  'index.js',
+  'eslint.config.js',
+  ...['lib', 'tools', 'chrome-extension', 'tests'].flatMap((directory) =>
+    readdirSync(new URL(`../${directory}/`, import.meta.url))
+      .filter((file) => /\.(?:js|mjs)$/.test(file))
+      .map((file) => `${directory}/${file}`),
+  ),
+  ...readdirSync(root).filter((file) => /^verify-.*\.mjs$/.test(file)),
+]
 for (const file of files) {
-  const result = spawnSync(process.execPath, ['--check', file], { cwd: root, stdio: 'inherit', shell: false })
+  const result = spawnSync(process.execPath, ['--check', file], {
+    cwd: root,
+    stdio: 'inherit',
+    shell: false,
+  })
   if (result.error || result.status !== 0) process.exit(1)
 }
 for (const file of ['install.sh', 'uninstall.sh']) {

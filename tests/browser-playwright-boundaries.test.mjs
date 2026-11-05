@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { createPlaywrightController } from '../lib/browser-playwright.js'
 import { createToolScope, getSessionState } from '../lib/session.js'
 
-async function fixture(run, options={}) {
+async function fixture(run) {
   const root=await mkdtemp(join(tmpdir(),'dsh-pw-boundary-'))
   const scope=createToolScope()
   const owner={agent:{session:{}},signal:new AbortController().signal}
@@ -70,6 +70,7 @@ test('cancellation at an empty stream end removes the newly created zero-byte fi
   let canceled=false
   handle.click=async()=>page.emit('download',{
     suggestedFilename:()=> 'fixture.txt',cancel:async()=>{canceled=true},failure:async()=>null,
+    // eslint-disable-next-line require-yield -- Empty stream tests cancellation at EOF.
     createReadStream:async()=>Readable.from((async function*(){abort.abort()})()),
   })
   const result=await c.download({ref:'p:1',destination_root:root},owner)

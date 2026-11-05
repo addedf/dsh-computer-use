@@ -44,6 +44,7 @@ const services = {
   },
   llm: {
     async resolveModelInfo() { return { inputModalities: ['text', 'image'] } },
+    // eslint-disable-next-line require-yield -- A model call must fail before producing any chunks.
     async * stream() { throw new Error('This check never calls a model.') },
   },
 }

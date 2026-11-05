@@ -12,7 +12,7 @@ const page = (body, title = 'DSH host acceptance') => `<!doctype html><html lang
 
 /** Parse only small, ordinary browser FormData requests used by this fixture. */
 function parseMultipart(bytes, contentType) {
-  const boundary = /^multipart\/form-data;\s*boundary=(?:"([A-Za-z0-9'()+_,.\/:=? -]{1,100})"|([A-Za-z0-9'()+_,.\/:=?-]{1,100}))$/i.exec(contentType || '')
+  const boundary = /^multipart\/form-data;\s*boundary=(?:"([A-Za-z0-9'()+_,./:=? -]{1,100})"|([A-Za-z0-9'()+_,./:=?-]{1,100}))$/i.exec(contentType || '')
   if (!boundary) throw new Error('Expected browser multipart form data.')
   const marker = Buffer.from(`--${boundary[1] || boundary[2]}`)
   if (!bytes.subarray(0, marker.length).equals(marker)) throw new Error('Invalid multipart start.')

@@ -62,7 +62,10 @@
   ],
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "check": "node tools/check.mjs",
+    "check": "node tools/check.mjs && npm run lint && npm run format:check",
+    "lint": "eslint . --max-warnings=0",
+    "format:check": "node tools/style-check.mjs --check",
+    "format": "node tools/style-check.mjs --write",
     "doctor": "node tools/doctor.mjs",
     "verify:desktop": "node verify-desktop.mjs",
     "verify:browser": "node verify-browser.mjs",
@@ -79,7 +82,11 @@
   "devDependencies": {
     "@deepseek-ai/dsh-skill": "0.1.2-rc.1",
     "@deepseek-ai/dsh-tools": "0.1.2-rc.1",
-    "@deepseek-ai/schemastery": "3.18.2"
+    "@deepseek-ai/schemastery": "3.18.2",
+    "@eslint/js": "10.0.1",
+    "eslint": "10.14.0",
+    "globals": "17.14.0",
+    "prettier": "3.9.10"
   },
   "repository": {
     "type": "git",
