@@ -50,6 +50,7 @@
     "verify-desktop.mjs",
     "verify-browser.mjs",
     "skills/",
+    "chrome-extension/",
     "verify-agent.mjs",
     "verify-host.mjs",
     "verify-web.mjs",
@@ -64,7 +65,8 @@
     "verify:agent": "node verify-agent.mjs",
     "verify:host": "node verify-host.mjs",
     "verify:web": "node verify-web.mjs",
-    "verify:approval-ui": "node verify-approval-ui.mjs"
+    "verify:approval-ui": "node verify-approval-ui.mjs",
+    "browser:setup": "node tools/install-chrome-bridge.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-tools": ">=0.1.2-rc.1 <0.3",
@@ -83,6 +85,7 @@
     "node": ">=22.18.0"
   },
   "dependencies": {
-    "playwright-core": "1.61.1"
+    "playwright-core": "1.61.1",
+    "ws": "8.22.1"
   }
 }
