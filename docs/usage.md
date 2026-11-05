@@ -116,6 +116,8 @@ Native Messaging 安装器目前支持 macOS/Linux；未完成安装、连接或
 
 `screen_observe` 自动完成缓存握手。明确不支持的功能提前拒绝；元数据缺失或整体探测超时保留原有 AX 兼容路径，并将新协议能力保持未知。普通像素点击只有在消费 schema 已核对、实际 PNG 观察返回 `capture_id` 时才使用一次性绑定，尝试投递后即消耗，失败也不重放。AX token、`from_zoom` 及当前未声明 capture 支持的拖拽维持各自协议，不混用 `capture_id`。插件不安装、升级驱动或代替用户授权。
 
+健康预检显示录屏权限通过，也不代表首次直接截图已经获准。若驱动返回 `px_capture_unavailable` / `direct_capture_consent_required`，它是在避免 macOS 首次截图授权框抢走焦点；请在方便时本人运行 `cua-driver permissions grant` 并完成系统确认，再重新观察。插件不会静默授权或绕过该保护，也不应反复尝试截图；可继续使用 `mode:"ax"` 操作有无障碍元素的应用，缺少实际图片时不能使用像素坐标。
+
 macOS 可显式设 `desktopIndicator:true` 启用带停止按钮的面板。面板由随包的 Swift/AppKit 源码在本用户私有缓存编译，需要已有 Swift 编译器和 macOS SDK；缺少工具链时返回 `CONTROL_INDICATOR_UNAVAILABLE`，不启动安装器。停止首先锁定会话并取消 Agent，再结束己方驱动；启用面板后若它异常退出或通信失败，也会停止对应控制。它是 DSH 自己的提示，不启动持续录屏或模拟系统共享菜单。
 
 `browserBackend:cua` 保留原有驱动后台浏览器。先用 browser_capabilities 查看实际能力；不能把已注册的工具名当作两个后端全部支持。CUA 0.38 未可靠打通的路径会明确返回不支持。

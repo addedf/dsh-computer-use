@@ -1,5 +1,24 @@
 # dsh-computer-use 验证报告（VERIFICATION）
 
+## 2026-11-05：宿主重启后的真实后台任务验收
+
+用户确认重启 DeepSeek Harness 后，通过实际宿主的两个原生模型会话分别完成网页和软件操作。测试对象为 loopback 虚构表单和 macOS Calculator；业务动作只由模型调用本插件工具执行，未用测试脚本、HTTP API、shell、AppleScript 或真实键鼠替代输入。外部协调器仅准备 fixture、读取独立证据并采样系统元数据。以下结论对应交付版本 `a5e0868`，不把后续本地诊断补丁当作宿主已经加载。
+
+| 验收项 | 本轮实测与边界 |
+| --- | --- |
+| 重启与连接 | 首次检查发现 CUA daemon 未运行且默认 socket 遗留；确认无服务、socket 拒绝连接后保留备份，以官方 `serve --embedded` 标准模式启动。没有重新授权或打开截图提示。首个 Web 请求在建页前因 `CHROME_EXTENSION_REQUIRED` 拒绝；用户手动点击“连接本机 DSH”后才继续。本轮不证明宿主重启可自动恢复这两项连接。 |
+| 实际 Web 流程 | 当前 Chrome 扩展后端在本轮登记页读取异步说明、填写姓名/代码、选择服务并生成一次预览。独立 fixture 的9项检查全部通过：表单、说明及异步说明各读取1次，有效预览请求恰好1次，结果与全部字段匹配；预览按钮的5类指针/点击事件各1次且 trusted。下拉语义选择的 input/change 不要求 trusted，不能把所有页面事件都称为可信。工具轨迹另有5项页面断言满足，两个输入与一次选择均读回 `effect:verified`。 |
+| 后台链接与释放 | 模型首次直接点击新窗口链接时，被 `BROWSER_BACKGROUND_LINK_REQUIRES_OPEN` 拒绝，随后用同一观察的 ref 经 `browser_tabs(open_link)` 登记新页；无前台降级。自然结束后的只读 `browser_verify` 返回 `NO_BROWSER`，证明本会话控制状态释放。本轮未独立读取 Chrome 分组状态，不能仅凭 `NO_BROWSER` 断言页面保留/取消分组已复验；其隔离 Chrome 回归与历史现场证据单独保留。 |
+| 实际软件流程 | 用 `app_launch(bring_to_front:false)` 后台启动 Calculator，驱动返回 `self_activation_suppressed:true`。7次 AX 按钮输入完成 `37×19`，均为 `delivery.mode:background`、`route:accessibility`；驱动的 `effect:unverifiable` 仅证明投递。实际 AX 文本断言分别读回37、19及703，703重复两次满足，故结果依据为界面树而非心算。不存在的704断言为 unknown，未作为严格反例或成功。未使用坐标、前台键盘或激活窗口。 |
+| 真实指针与焦点 | 前台/真实指针/窗口的独立只读采样目标周期为40ms，UI焦点约每200ms异步探测并可能携带缓存；Web主区间10:30:13.239–10:31:45.111（北京时间）2296个样本，桌面10:35:25.388–10:39:09.344为5596个样本；最大采样间隙分别113.310ms、118.317ms。Web期间没有采到Chrome成为前台，桌面期间没有采到Calculator成为前台/AX焦点目标。但同期存在其他应用切换和真实指针移动，来源未确认，不把它们归因模型，也不据此宣称全系统前台、真实指针或输入焦点全程不变。AX系统级focusedApplication读取失败，UI焦点采用前台PID查询兜底且有unknown样本、缺少稳定元素标识，故严格“零焦点丢失”仍未证实。页面 focus/visibility 值不作OS证据。 |
+| 桌面动作窄窗口 | 按实际工具call/result时间及两侧200ms分别复核：后台启动和3次独立点击均未见前台、真实指针或AX焦点候选PID/role变化，上述窗口读数及UI兜底探针无unknown（不含始终失败的系统级focusedApplication）；不扩大为全程证明。包含另外3次点击的同一批次前台稳定，但真实指针有20次位置变化、AX UI候选role变动2次及1个窗口unknown；最后等号批次前台/指针/UI候选稳定，精确call→result区间有3个窗口unknown，两侧各扩展200ms后为4个。批次内缺少独立leaf时间，不为其编造逐次点击窗口；全部动作的扩展窗口都未见Calculator成为前台或激活目标。 |
+| agent虚拟光标 | 最后一次等号输入及状态读取在同一批次：立即 `enabled:true`、`cursor_visible:true`；等待2000ms后 `enabled:true`、`cursor_visible:false`。自然结束时同一owner的历史释放记录：02:39:09.387Z禁用确认false，.418Z读回enabled/visible均false，.442Z结束ACK active=false。`lastRelease.startedAt` .352Z是清理开始时间，不是会话创建时间。结束后实时getter为 `DRIVER_EXIT`，仍报告未知，不重新创建会话伪造实时证明。 |
+| 截图权限边界 | 两次模型native观察仅得到空截图；独立只读检查确认实际 `screenshot_error.code=px_capture_unavailable`，原因为 `direct_capture_consent_required`。驱动主动跳过首次截屏，避免macOS授权框抢走键盘焦点；本轮未执行 `permissions grant`、设置绕过变量或弹出系统提示。AX操作不受影响。健康预检的录屏pass与此次直接截图授权是不同检查，不能以预检pass宣称图像路径可用；bundle身份检查fail及producer unverified也不当作此次失败的已证实原因。 |
+
+本轮证明上述网页与Calculator任务可以经后台链路完成；严格的真实指针连续不变、零输入焦点丢失、任意网站/软件兼容性仍未通过验收。未操作真实账户、发送消息、上传下载或提交外部业务。原始工具轨迹、fixture和只含系统元数据的采样日志保存在本机私有测试目录，不纳入提交；计算器及任务页面未由测试关闭。
+
+现场发现的空截图诊断另作最小补丁（`e88acc8`）：native、vision及两种zoom路径对首次直接截图授权返回固定说明，驱动原始reason/suggestion不透传；已有AX元素仍可用，但不发布像素坐标或图片尺寸，明确截图错误不再触发重复采集。新增9项针对性测试后，默认 **485项：484通过、0失败、1跳过**；观察相关定向测试 **53/53**、91 JS+2 Shell语法、全库ESLint、范围内Prettier及diff检查通过。补丁只做了本地回归，未把它记为实际宿主复验通过。收尾仅停止本轮loopback服务和采样器，保留任务页面、Calculator及已恢复的驱动服务；未修改宿主配置或截图授权。
+
 ## 2026-11-05：代码交付与重启后验收准备
 
 代码已按桥接基础、控制运行时和开发检查分别提交，开源复用记录另作独立文档提交。下方历史段落中的“未提交/未推送”是各轮验证当时的状态；当前交付以 Git 提交和远程记录为准。提交前重新运行：默认476项（475通过、1项真实浏览器默认跳过），91 JS+2 Shell语法、全库ESLint、范围内Prettier和diff检查均通过。新增81个公共依赖的下载地址已逐项核对官方精确版本与integrity后规范化；候选未含真实凭据、本地配置或运行数据。
